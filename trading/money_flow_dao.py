@@ -18,6 +18,8 @@ class MoneyFlowDAO:
         """初始化资金流向DAO"""
         try:
             import tushare as ts
+            from utils.tushare_helper import ensure_tushare_token
+            ensure_tushare_token()
             self.tushare = ts
             self.pro = ts.pro_api()
         except Exception as e:

@@ -667,6 +667,8 @@ def get_stock_detail(code):
             logger.info(f"数据库中无 {code} 数据，尝试从Tushare获取")
             try:
                 import tushare as ts
+                from utils.tushare_helper import ensure_tushare_token
+                ensure_tushare_token()
                 pro = ts.pro_api()
                 # 转换代码格式：000001 -> 000001.SZ, 600000 -> 600000.SH
                 if not code.endswith(('.SH', '.SZ')):
@@ -849,6 +851,8 @@ def run_selection():
         strategies_to_run = None
         logic = 'or'
         end_date = None
+        start_date = None  # 开始日期（可选，提供则为日期范围选股）
+        include_diagnostics = False  # 是否返回未选中股票诊断信息
 
         # 解析请求参数
         if request.method == 'POST':
@@ -860,6 +864,8 @@ def run_selection():
                 b1_match = data.get('b1_match', False)  # 是否启用B1完美图形匹配
                 min_similarity = data.get('min_similarity', 60.0)  # 最小相似度阈值
                 lookback_days = data.get('lookback_days', 25)  # 回看天数
+                include_diagnostics = bool(data.get('include_diagnostics', False))  # 是否返回未选中股票诊断
+                start_date = data.get('start_date')  # 开始日期（可选，日期范围选股）
 
                 # 如果end_date为空，使用当前工作日期
                 if not end_date:
@@ -930,7 +936,21 @@ def run_selection():
             func_logger.warning("没有可用的股票数据")
             return jsonify({'success': True, 'data': {}, 'time': dt.now().strftime('%Y-%m-%d %H:%M:%S')})
         
+        # ==================== 日期范围选股模式 ====================
+        # 提供 start_date 且早于 end_date 时，逐交易日执行选股并按日期分组返回
+        if start_date and end_date and start_date < end_date:
+            return run_selection_date_range(
+                start_date=start_date,
+                end_date=end_date,
+                strategies_to_run=strategies_to_run,
+                include_diagnostics=include_diagnostics,
+                stock_data=stock_data,
+                stock_names=stock_names,
+                request_start_time=request_start_time
+            )
+        
         results = {}
+        diagnostics = {}  # 未选中股票诊断信息（仅 include_diagnostics=True 时收集）
         
         # AND逻辑：找出被所有选中策略都选中的股票
         if logic == 'and' and strategies_to_run and len(strategies_to_run) > 1:
@@ -1048,6 +1068,7 @@ def run_selection():
                 for strategy_name, strategy in strategies_to_execute:
                     func_logger.info(f"执行策略: {strategy_name}")
                     signals = []
+                    rejected = [] if include_diagnostics else None
                     error_count = 0
                     strategy_start_time = dt.now()
                     
@@ -1066,6 +1087,13 @@ def run_selection():
                                     'signals': result['signals'],
                                     'strategy_display_name': strategy_display_name  # 添加中文名称
                                 })
+                            elif rejected is not None:
+                                # 收集未选中股票及原因（诊断模式）
+                                rejected.append({
+                                    'code': code,
+                                    'name': name,
+                                    'reason': strategy.get_last_reject_reason()
+                                })
                         except Exception as e:
                             # 跳过分析失败的股票
                             error_count += 1
@@ -1080,6 +1108,23 @@ def run_selection():
                     strategy_time = (dt.now() - strategy_start_time).total_seconds()
                     results[strategy_name] = signals
                     func_logger.info(f"策略 {strategy_name} 完成 - 选中 {len(signals)} 只股票，分析失败 {error_count} 只，总耗时 {strategy_time:.1f}秒")
+                    
+                    # 收集诊断信息（未选中股票及原因）
+                    if include_diagnostics and rejected is not None:
+                        import re
+                        reason_stats = {}
+                        for item in rejected:
+                            # 按条件类别统计（去掉括号内容和具体数值，便于归类）
+                            category = item['reason'].split('（')[0].split('，')[0]
+                            category = re.sub(r'(?<![A-Za-z0-9])\d+\.?\d*', 'N', category)
+                            reason_stats[category] = reason_stats.get(category, 0) + 1
+                        diagnostics[strategy_name] = {
+                            'total_analyzed': len(stock_data),
+                            'selected': len(signals),
+                            'rejected_count': len(rejected),
+                            'reason_stats': reason_stats,
+                            'rejected': rejected
+                        }
                 
                 # 计算交集分析（仅当有多个策略且都有结果时）
                 if len(results) > 1:
@@ -1202,6 +1247,14 @@ def run_selection():
                 converted_results[display_name] = signals
             cleaned_results = converted_results
         
+        # 附加诊断信息（未选中股票及原因），键同样转换为中文名称
+        if include_diagnostics and diagnostics:
+            converted_diagnostics = {}
+            for strategy_name, diag in diagnostics.items():
+                display_name = strategy_display_names.get(strategy_name, strategy_name)
+                converted_diagnostics[display_name] = diag
+            cleaned_results['_diagnostics'] = clean_data_for_json(converted_diagnostics)
+        
         # 如果启用了B1完美图形匹配
         if b1_match:
             func_logger.info(f"启用B1完美图形匹配，最小相似度: {min_similarity}，回看天数: {lookback_days}")
@@ -1312,6 +1365,191 @@ def run_selection():
             'success': False,
             'error': f'选股执行失败: {error_msg}'
         })
+
+
+def run_selection_date_range(start_date, end_date, strategies_to_run, include_diagnostics,
+                             stock_data, stock_names, request_start_time):
+    """
+    日期范围选股：对 start_date ~ end_date 之间的每个交易日分别执行选股，按日期分组返回
+
+    数据只加载一次（截至 end_date），每个交易日通过截断数据模拟当日选股，避免重复IO。
+
+    返回结构：
+        data: {
+            '策略中文名': [合并后的信号（并集，重复股票保留最新日期）],
+            '_by_date': {
+                'YYYY-MM-DD': {
+                    '策略中文名': [当日信号],
+                    '_diagnostics': {...}  # 可选，未选中股票及原因
+                }, ...
+            }
+        }
+    """
+    func_logger = logging.getLogger(__name__)
+    func_logger.info("=" * 60)
+    func_logger.info(f"日期范围选股: {start_date} ~ {end_date}")
+
+    MAX_RANGE_DAYS = 30  # 范围上限，防止耗时过长
+
+    try:
+        # 获取范围内的交易日列表（数据库中实际存在的日期）
+        rows = db_manager.query(
+            "SELECT DISTINCT date FROM stock_kline WHERE date >= ? AND date <= ? ORDER BY date",
+            (start_date, end_date)
+        )
+        trading_days = sorted({str(r['date'])[:10] for r in rows if r.get('date')})
+
+        if not trading_days:
+            return jsonify({'success': False, 'error': f'{start_date} ~ {end_date} 范围内没有K线数据'})
+        if len(trading_days) > MAX_RANGE_DAYS:
+            return jsonify({
+                'success': False,
+                'error': f'日期范围内包含 {len(trading_days)} 个交易日，超过上限 {MAX_RANGE_DAYS} 天，请缩小范围'
+            })
+
+        func_logger.info(f"范围内交易日: {len(trading_days)} 天: {trading_days[0]} ~ {trading_days[-1]}")
+
+        # 加载策略中文名称映射
+        import yaml
+        config_file = Path("config/strategy_params.yaml")
+        strategy_display_names = {}
+        if config_file.exists():
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+            for sname, sconfig in (config.get('strategies', {}) or {}).items():
+                strategy_display_names[sname] = sconfig.get('display_name', sname)
+
+        # 确定要执行的策略
+        strategies_to_execute = []
+        if strategies_to_run:
+            for sname in dict.fromkeys(strategies_to_run):
+                if sname in registry.strategies:
+                    strategy = registry.get_strategy(sname)
+                    if strategy:
+                        strategies_to_execute.append((sname, strategy))
+                else:
+                    func_logger.warning(f"指定的策略不存在: {sname}")
+        else:
+            for sname in registry.strategies.keys():
+                strategy = registry.get_strategy(sname)
+                if strategy:
+                    strategies_to_execute.append((sname, strategy))
+
+        if not strategies_to_execute:
+            return jsonify({'success': False, 'error': '没有可执行的策略'})
+
+        # 预处理：日期列统一转换为 Timestamp，便于按日截断
+        func_logger.info("预处理股票数据（日期格式统一）...")
+        normalized_data = {}
+        for code, (name, df) in stock_data.items():
+            try:
+                df = df.copy()
+                df['date'] = pd.to_datetime(df['date'])
+                normalized_data[code] = (name, df)
+            except Exception:
+                continue
+
+        by_date = {}          # day -> {display_name: signals, '_diagnostics': {...}}
+        merged = {}           # strategy_name -> {code: signal_entry}（并集）
+        merged_dates = {}     # (strategy_name, code) -> [days]
+
+        for day_idx, day in enumerate(trading_days):
+            day_ts = pd.Timestamp(day)
+            day_start = dt.now()
+
+            # 按当日截断每只股票的数据（仅保留 <= day 的数据）
+            day_stock_data = {}
+            for code, (name, df) in normalized_data.items():
+                day_df = df[df['date'] <= day_ts]
+                if len(day_df) >= 30:
+                    day_stock_data[code] = (name, day_df)
+
+            day_result = {}
+            day_diag = {}
+
+            for strategy_name, strategy in strategies_to_execute:
+                display_name = strategy_display_names.get(strategy_name, strategy_name)
+                signals = []
+                rejected = [] if include_diagnostics else None
+
+                for code, (name, df) in day_stock_data.items():
+                    try:
+                        result = strategy.analyze_stock(code, name, df)
+                        if result:
+                            signals.append({
+                                'code': result['code'],
+                                'name': result.get('name', stock_names.get(code, '未知')),
+                                'signals': result['signals'],
+                                'strategy_display_name': display_name
+                            })
+                            # 并集合并（后处理的日期覆盖先处理的，最终保留最新日期）
+                            merged.setdefault(strategy_name, {})[code] = signals[-1]
+                            merged_dates.setdefault((strategy_name, code), []).append(day)
+                        elif rejected is not None:
+                            rejected.append({
+                                'code': code,
+                                'name': name,
+                                'reason': strategy.get_last_reject_reason()
+                            })
+                    except Exception:
+                        pass
+
+                day_result[display_name] = signals
+
+                if include_diagnostics and rejected is not None:
+                    import re
+                    reason_stats = {}
+                    for item in rejected:
+                        category = item['reason'].split('（')[0].split('，')[0]
+                        category = re.sub(r'(?<![A-Za-z0-9])\d+\.?\d*', 'N', category)
+                        reason_stats[category] = reason_stats.get(category, 0) + 1
+                    day_diag[display_name] = {
+                        'total_analyzed': len(day_stock_data),
+                        'selected': len(signals),
+                        'rejected_count': len(rejected),
+                        'reason_stats': reason_stats,
+                        'rejected': rejected
+                    }
+
+            if include_diagnostics:
+                day_result['_diagnostics'] = day_diag
+            by_date[day] = day_result
+
+            elapsed = (dt.now() - day_start).total_seconds()
+            total_selected = sum(len(v) for k, v in day_result.items() if isinstance(v, list))
+            func_logger.info(f"[{day_idx + 1}/{len(trading_days)}] {day} 完成 - 选中 {total_selected} 只，耗时 {elapsed:.1f}秒")
+
+        # 为并集信号附加被选中的日期列表
+        for (strategy_name, code), days in merged_dates.items():
+            entry = merged.get(strategy_name, {}).get(code)
+            if entry is not None:
+                entry['selected_dates'] = sorted(set(days))
+
+        # 组装返回数据（键转换为中文名称，保持与单日模式一致的结构）
+        data = {}
+        for strategy_name, code_map in merged.items():
+            display_name = strategy_display_names.get(strategy_name, strategy_name)
+            data[display_name] = list(code_map.values())
+        data['_by_date'] = by_date
+
+        total_time = (dt.now() - request_start_time).total_seconds()
+        func_logger.info(f"日期范围选股完成 - {len(trading_days)} 个交易日，总耗时 {total_time:.1f}秒")
+        func_logger.info("=" * 60)
+
+        return jsonify({
+            'success': True,
+            'data': clean_data_for_json(data),
+            'b1_match': False,
+            'date_range': {'start_date': trading_days[0], 'end_date': trading_days[-1], 'trading_days': len(trading_days)},
+            'time': dt.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'selection_date': end_date,
+            'strategy_display_names': strategy_display_names
+        })
+
+    except Exception as e:
+        func_logger.error(f"日期范围选股失败: {str(e)}")
+        func_logger.error(f"错误堆栈: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': f'日期范围选股失败: {str(e)}'})
 
 
 @app.route('/api/save_selection', methods=['POST'])
@@ -4436,6 +4674,406 @@ def update_risk_config():
             'success': False,
             'message': f'更新风控配置失败: {str(e)}'
         }), 500
+
+
+# ==================== 趋势动物 API ====================
+# apiKey 仅存在于服务端 config/trend_animal_config.json，所有接口由后端转发
+
+# 信号股趋势确认默认快照字段（精简控制成本，每行约0.028元）
+TREND_DEFAULT_FIELDS = [
+    'isTrendRightSide', 'return1d',
+    'trendTemperatureCurr', 'trendTemperaturePrev', 'trendPhaseCurr',
+    'trendStrengthGlobalCurr',
+    'stopwinFlagByDangerSignal', 'stopwinFlagByBoilingTemperature', 'stopwinFlagByPopChampagne',
+]
+
+
+def _trend_client():
+    from utils.trend_animal_client import get_trend_client
+    return get_trend_client()
+
+
+@app.route('/api/trend/status')
+def trend_status():
+    """数据更新状态 + 账户余额（免费接口）"""
+    try:
+        client = _trend_client()
+        if not client.configured:
+            return jsonify({'success': False, 'message': '未配置趋势动物API Key'})
+        update = client.get_update_status()
+        balance = client.get_account_balance('summary')
+        billing = client.get_column_billing()
+        # 字段价格表（用于前端估算费用）
+        prices = {}
+        if client.ok(billing):
+            for item in billing.get('data') or []:
+                prices[item.get('columnName')] = item.get('priceCost', 0)
+        return jsonify({
+            'success': True,
+            'data': {
+                'update_status': update.get('data') if client.ok(update) else [],
+                'balance': (balance.get('data') or [{}])[0] if isinstance(balance.get('data'), list) and balance.get('data') else balance.get('data'),
+                'field_prices': prices,
+                'default_fields': TREND_DEFAULT_FIELDS,
+            }
+        })
+    except Exception as e:
+        logger.error(f"趋势动物状态获取失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/search')
+def trend_search():
+    """品种搜索（0.01元/次）"""
+    try:
+        keyword = request.args.get('keyword', '').strip()
+        if not keyword:
+            return jsonify({'success': False, 'message': '缺少搜索关键词'})
+        client = _trend_client()
+        result = client.search_ticker(keyword)
+        if client.ok(result):
+            return jsonify({'success': True, 'data': result.get('data') or []})
+        return jsonify({'success': False, 'message': result.get('msg') or result.get('_error', '搜索失败')})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/snapshot')
+def trend_snapshot():
+    """截面快照（按字段计费，服务端限定字段范围）"""
+    try:
+        tm_ids = request.args.get('tmIds', '').strip()
+        if not tm_ids:
+            return jsonify({'success': False, 'message': '缺少tmIds参数'})
+        id_list = [int(x) for x in tm_ids.split(',') if x.strip().isdigit()]
+        if not id_list:
+            return jsonify({'success': False, 'message': 'tmIds格式错误'})
+        fields = request.args.get('fields', '').strip()
+        field_list = [f for f in fields.split(',') if f.strip()] if fields else TREND_DEFAULT_FIELDS
+        client = _trend_client()
+        result = client.get_snapshot(id_list, field_list)
+        if client.ok(result):
+            return jsonify({'success': True, 'data': result.get('data') or []})
+        return jsonify({'success': False, 'message': result.get('msg') or result.get('_error', '快照获取失败')})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/plot')
+def trend_plot():
+    """趋势图（0.1元/次，返回base64 PNG）"""
+    try:
+        tm_id = request.args.get('tmId', type=int)
+        seq = request.args.get('seq', 1, type=int)
+        if not tm_id:
+            return jsonify({'success': False, 'message': '缺少tmId参数'})
+        client = _trend_client()
+        result = client.get_trend_plot(tm_id, seq=seq)
+        if client.ok(result):
+            return jsonify({'success': True, 'data': result.get('data')})
+        return jsonify({'success': False, 'message': result.get('msg') or result.get('_error', '趋势图生成失败')})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/signal-stocks')
+def trend_signal_stocks():
+    """选股记录 + 趋势动物趋势确认（核心联动）
+
+    流程：选股记录 → tmId映射（本地缓存优先） → 批量快照 → 按Nick纪律规则打标
+    打标为“基于趋势动物规则的分析判断”，接口字段为“接口直接返回的事实”
+    """
+    try:
+        date = request.args.get('date')
+        fields_param = request.args.get('fields', '').strip()
+        field_list = [f for f in fields_param.split(',') if f.strip()] if fields_param else TREND_DEFAULT_FIELDS
+
+        # 1. 取选股记录
+        if date:
+            sql = """SELECT DISTINCT stock_code, stock_name, strategy_name, selection_date, selection_price
+                      FROM stock_selection_record WHERE selection_date = ? AND is_active = 1
+                      AND strategy_name NOT LIKE '%M头%' AND strategy_name NOT LIKE '%多死叉%'"""
+            records = db_manager.query(sql, (date,))
+        else:
+            sql = """SELECT DISTINCT stock_code, stock_name, strategy_name, selection_date, selection_price
+                      FROM stock_selection_record WHERE is_active = 1
+                      AND strategy_name NOT LIKE '%M头%' AND strategy_name NOT LIKE '%多死叉%'
+                      AND selection_date = (SELECT MAX(selection_date) FROM stock_selection_record WHERE is_active = 1)"""
+            records = db_manager.query(sql)
+
+        if not records:
+            return jsonify({'success': True, 'data': {'stocks': [], 'message': '该日期无选股记录', 'estimated_cost': 0}})
+
+        # 每只股票保留策略列表
+        stock_map = {}
+        for r in records:
+            code = r['stock_code']
+            if code not in stock_map:
+                stock_map[code] = {'code': code, 'name': r['stock_name'], 'strategies': set(),
+                                   'selection_price': r.get('selection_price'), 'selection_date': r.get('selection_date')}
+            if r.get('strategy_name'):
+                stock_map[code]['strategies'].add(r['strategy_name'])
+
+        client = _trend_client()
+        if not client.configured:
+            return jsonify({'success': False, 'message': '未配置趋势动物API Key'})
+
+        # 2. tmId 映射（缓存优先）
+        stocks = [{'code': c, 'name': m['name']} for c, m in stock_map.items()]
+        tmid_map = client.resolve_tmids(stocks)
+
+        # 3. 批量快照（每批≤100只）
+        snapshot_map = {}
+        tm_ids = list(tmid_map.values())
+        for i in range(0, len(tm_ids), 100):
+            batch = tm_ids[i:i + 100]
+            result = client.get_snapshot(batch, field_list)
+            if client.ok(result):
+                for item in result.get('data') or []:
+                    snapshot_map[item.get('tmId')] = item
+
+        # 4. 合并 + 纪律打标
+        TEMP_ORDER = {'冻': 0, '寒': 1, '凉': 2, '平': 3, '温': 4, '热': 5, '沸': 6}
+        result_stocks = []
+        for code, meta in stock_map.items():
+            tmid = tmid_map.get(code)
+            snap = snapshot_map.get(tmid, {}) if tmid else {}
+            temp_curr = snap.get('trendTemperatureCurr')
+            temp_prev = snap.get('trendTemperaturePrev')
+            strength = snap.get('trendStrengthGlobalCurr')
+            danger = snap.get('stopwinFlagByDangerSignal')
+            boiling = snap.get('stopwinFlagByBoilingTemperature')
+            champagne = snap.get('stopwinFlagByPopChampagne')
+
+            # ---- 基于趋势动物规则的分析判断（Nick纪律） ----
+            tags = []
+            curr_lv = TEMP_ORDER.get(temp_curr, -1)
+            prev_lv = TEMP_ORDER.get(temp_prev, -1)
+            if prev_lv == TEMP_ORDER['温'] and curr_lv == TEMP_ORDER['热']:
+                tags.append({'type': 'buy', 'text': '温转热·买入信号'})
+            if prev_lv >= TEMP_ORDER['温'] and curr_lv <= TEMP_ORDER['平'] and curr_lv >= 0:
+                tags.append({'type': 'sell', 'text': '温转平·离场信号'})
+            if danger:
+                tags.append({'type': 'risk', 'text': '危险信号·止盈复核'})
+            if boiling:
+                tags.append({'type': 'risk', 'text': '沸·分段止盈'})
+            if champagne:
+                tags.append({'type': 'risk', 'text': '开香槟·止盈复核'})
+            if isinstance(strength, (int, float)) and strength >= 90:
+                tags.append({'type': 'strong', 'text': '高强度≥90'})
+
+            result_stocks.append({
+                'code': code, 'name': meta['name'],
+                'strategies': sorted(meta['strategies']),
+                'selection_price': meta['selection_price'], 'selection_date': meta['selection_date'],
+                'tmId': tmid,
+                # ---- 接口直接返回的事实 ----
+                'snapshot': snap,
+                # ---- 基于规则的分析判断 ----
+                'discipline_tags': tags,
+            })
+
+        # 按强度降序
+        result_stocks.sort(key=lambda x: (x['snapshot'].get('trendStrengthGlobalCurr') or -1), reverse=True)
+
+        # 5. 估算费用（快照付费字段 × 行数，阶梯折扣；tmId搜索 0.01×未命中缓存数）
+        billing = client.get_column_billing()
+        price_map = {}
+        if client.ok(billing):
+            for item in billing.get('data') or []:
+                price_map[item.get('columnName')] = float(item.get('priceCost') or 0)
+        row_cost = sum(price_map.get(f, 0) for f in field_list)
+        n = len(tm_ids)
+        if n <= 20:
+            est_snapshot = row_cost * n
+        else:
+            est_snapshot = row_cost * (20 + min(n - 20, 80) * 0.8 + max(n - 100, 0) * 0.6)
+        est_search = 0.01 * len(stocks)  # 上限估计（缓存命中后为0）
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'stocks': result_stocks,
+                'total': len(result_stocks),
+                'tmid_resolved': len(tmid_map),
+                'estimated_cost': round(est_snapshot + est_search, 3),
+                'cost_note': f'快照约{est_snapshot:.3f}元({n}行×{row_cost:.3f}元/行,阶梯折扣) + tmId搜索≤{est_search:.2f}元(缓存命中后为0)，以实际账单为准',
+            }
+        })
+    except Exception as e:
+        logger.error(f"信号股趋势确认失败: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/config', methods=['GET', 'POST'])
+def trend_config():
+    """趋势动物 API Key 配置（GET 查看状态/打码密钥，POST 保存新密钥）"""
+    client = _trend_client()
+    if request.method == 'GET':
+        return jsonify({
+            'success': True,
+            'data': {
+                'configured': client.configured,
+                'masked_key': client.masked_key(),
+                'base_url': client.base_url,
+            }
+        })
+    # POST 保存
+    try:
+        data = request.get_json() or {}
+        api_key = (data.get('api_key') or '').strip()
+        if not api_key:
+            return jsonify({'success': False, 'message': 'API Key 不能为空'})
+        if not api_key.startswith('sk-'):
+            return jsonify({'success': False, 'message': 'API Key 格式不正确（应以 sk- 开头）'})
+        # 先验证后保存：临时用新密钥调免费接口，验证不通过则不落盘
+        old_key = client.api_key
+        client.api_key = api_key
+        test = client.get_update_status()
+        if not client.ok(test):
+            client.api_key = old_key  # 还原
+            return jsonify({'success': False, 'message': f"密钥验证失败: {test.get('msg') or test.get('_error', '密钥无效或网络异常')}，未保存"})
+        client.update_api_key(api_key, persist=True)
+        return jsonify({'success': True, 'message': 'API Key 已保存并验证通过', 'data': {'masked_key': client.masked_key()}})
+    except Exception as e:
+        logger.error(f"保存趋势动物配置失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/trend/selection-dates')
+def trend_selection_dates():
+    """可选的选股日期列表（供信号股趋势确认选择）"""
+    try:
+        rows = db_manager.query(
+            "SELECT selection_date, COUNT(*) as cnt FROM stock_selection_record WHERE is_active = 1 GROUP BY selection_date ORDER BY selection_date DESC LIMIT 30")
+        return jsonify({'success': True, 'data': rows})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
+
+
+# ==================== 趋势日报 ====================
+
+TREND_DAILY_FIELDS = [
+    'isTrendRightSide', 'return1d', 'return1m', 'industryName',
+    'trendTemperatureCurr', 'trendTemperaturePrev', 'trendPhaseCurr',
+    'trendStrengthGlobalCurr',
+    'stopwinFlagByDangerSignal', 'stopwinFlagByBoilingTemperature', 'stopwinFlagByPopChampagne',
+]
+
+# 趋势日报关注的对象（tmId 来自 getUpdateStatus / searchTicker 实测）
+TREND_MARKET_TMIDS = {'A股': 303121, 'ETF基金': 377042}
+TREND_HOT_COMBOS = {'温转热(A股)': 622466, '温转热(ETF基金)': 622485}
+
+
+def _build_daily_report(client):
+    """构建趋势日报（调用付费接口，每日一次）"""
+    report = {'built_at': dt.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # 1. 数据更新状态（免费）
+    update = client.get_update_status()
+    report['update_status'] = update.get('data') if client.ok(update) else []
+
+    # 2. 大盘状态（A股/ETF基金整体）
+    market_snap = client.get_snapshot(list(TREND_MARKET_TMIDS.values()), TREND_DAILY_FIELDS)
+    market_map = {}
+    if client.ok(market_snap):
+        for item in market_snap.get('data') or []:
+            market_map[item.get('tmId')] = item
+    report['market'] = [{'name': name, **(market_map.get(tmid) or {})} for name, tmid in TREND_MARKET_TMIDS.items()]
+
+    # 3. 温转热组合成分 → 快照
+    total_rows = 0
+    for combo_name, combo_tmid in TREND_HOT_COMBOS.items():
+        comp = client.get_component_ticker(combo_tmid)
+        components = comp.get('data') if client.ok(comp) else []
+        comp_tmids = [c['tmId'] for c in components if c.get('tmId')]
+        total_rows += len(comp_tmids)
+        snaps = []
+        if comp_tmids:
+            snap_result = client.get_snapshot(comp_tmids, TREND_DAILY_FIELDS)
+            if client.ok(snap_result):
+                snaps = snap_result.get('data') or []
+        # 按全局强度降序
+        snaps.sort(key=lambda x: (x.get('trendStrengthGlobalCurr') or -1), reverse=True)
+        key = 'hot_stocks' if 'A股' in combo_name else 'hot_etfs'
+        report[key] = snaps
+
+    # 4. 风险观察（从已取快照中筛选风险标志）
+    risk_watch = []
+    for item in report.get('hot_stocks', []) + report.get('hot_etfs', []):
+        flags = []
+        if item.get('stopwinFlagByDangerSignal'):
+            flags.append('危险信号')
+        if item.get('stopwinFlagByBoilingTemperature'):
+            flags.append('沸')
+        if item.get('stopwinFlagByPopChampagne'):
+            flags.append('开香槟')
+        if flags:
+            risk_watch.append({**item, 'risk_flags': flags})
+    report['risk_watch'] = risk_watch
+
+    # 5. 主线板块（温转热个股按行业聚合，基于接口数据计算）
+    industry_count = {}
+    for item in report.get('hot_stocks', []):
+        ind = item.get('industryName') or '未分类'
+        industry_count[ind] = industry_count.get(ind, 0) + 1
+    report['main_industries'] = sorted(
+        [{'industry': k, 'count': v} for k, v in industry_count.items()],
+        key=lambda x: -x['count'])
+
+    # 6. 费用说明
+    row_cost = 0.037  # TREND_DAILY_FIELDS 合计
+    report['cost_note'] = f'成分查询0.2元 + 快照约{(2 + total_rows) * row_cost:.2f}元（{2 + total_rows}行×{row_cost}元/行），每日首次构建时产生，重复打开走缓存不计费'
+    return report
+
+
+@app.route('/api/trend/daily-report')
+def trend_daily_report():
+    """趋势日报（服务端按日缓存，重复打开免费）
+
+    参数: refresh=1 强制重新构建（重新计费）
+    """
+    try:
+        client = _trend_client()
+        if not client.configured:
+            return jsonify({'success': False, 'message': '未配置趋势动物API Key'})
+
+        # 数据日期（A股）决定缓存键
+        cache_dir = Path('data')
+        refresh = request.args.get('refresh') == '1'
+
+        # 先确认数据日期（免费接口）
+        update = client.get_update_status()
+        ashare_date = None
+        if client.ok(update):
+            for item in update.get('data') or []:
+                if item.get('asset') == 'A股':
+                    ashare_date = item.get('asOfDate')
+                    break
+        cache_key = ashare_date or dt.now().strftime('%Y-%m-%d')
+        cache_file = cache_dir / f'trend_daily_report_{cache_key}.json'
+
+        # 命中缓存直接返回
+        if cache_file.exists() and not refresh:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            cached['from_cache'] = True
+            return jsonify({'success': True, 'data': cached})
+
+        # 构建日报
+        report = _build_daily_report(client)
+        report['as_of_date'] = cache_key
+        report['from_cache'] = False
+
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(report, f, ensure_ascii=False, indent=1)
+
+        return jsonify({'success': True, 'data': report})
+    except Exception as e:
+        logger.error(f"趋势日报构建失败: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)})
 
 
 if __name__ == '__main__':

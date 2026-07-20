@@ -16,6 +16,15 @@ class BaseStrategy(ABC):
         """
         self.name = name
         self.params = params or {}
+        # 最近一次选股未选中的原因（供诊断展示，单线程顺序调用下安全）
+        self._reject_reason = None
+    
+    def get_last_reject_reason(self):
+        """
+        获取最近一次分析未选中股票的原因
+        :return: 原因字符串，未记录时返回通用原因
+        """
+        return self._reject_reason or '不满足策略选股条件'
     
     def quick_filter(self, df):
         """
@@ -153,6 +162,7 @@ class BaseStrategy(ABC):
         :return: 选股信号列表
         """
         if not self._validate_data(df):
+            self._reject_reason = '数据无效或数据量不足（少于20条K线）'
             return []
 
         # 停牌股检查已禁用 - 暂时跳过此检查以避免非交易日无法选股
@@ -161,13 +171,18 @@ class BaseStrategy(ABC):
 
         if hasattr(self, '_quick_filter_with_lookback'):
             if not self._quick_filter_with_lookback(df):
+                if not self._reject_reason:
+                    self._reject_reason = '未通过快速过滤'
                 return []
         elif not self.quick_filter(df):
+            if not self._reject_reason:
+                self._reject_reason = '未通过快速过滤'
             return []
 
         try:
             df = self.calculate_indicators(df)
         except Exception:
+            self._reject_reason = '指标计算异常'
             return []
 
         if selection_date is None:
@@ -191,10 +206,12 @@ class BaseStrategy(ABC):
         """
         try:
             # 使用标准化的选股执行过程
+            self._reject_reason = None  # 每次分析前重置
             signals = self.execute_selection(df, stock_code, stock_name)
             
             # 结果过滤和标准化
             if signals:
+                self._reject_reason = None  # 选中时清空原因
                 return {
                     'code': stock_code,
                     'name': stock_name,
@@ -207,4 +224,5 @@ class BaseStrategy(ABC):
             import logging
             logger = logging.getLogger(__name__)
             logger.debug(f"分析股票 {stock_code} 失败: {str(e)}")
+            self._reject_reason = f'分析异常: {str(e)}'
             return None

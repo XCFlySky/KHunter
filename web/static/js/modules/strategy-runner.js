@@ -251,6 +251,24 @@ const StrategyRunnerModule = {
             timing_strategy_display_name: finalTimingDisplayName
         };
         
+        // 择时策略一致性检查：后端要求同一批次所有任务使用相同的择时策略
+        const conflicting = this.tasks.filter(t => t.timing_strategy !== finalTimingStrategy);
+        if (conflicting.length > 0) {
+            const existingTimingName = conflicting[0].timing_strategy_display_name || conflicting[0].timing_strategy;
+            const ok = confirm(
+                `择时策略不一致！\n\n` +
+                `任务列表中已有 ${conflicting.length} 个任务使用「${existingTimingName}」，\n` +
+                `新任务使用「${finalTimingDisplayName}」。\n` +
+                `策略运行器要求同一批次所有任务使用相同的择时策略。\n\n` +
+                `点击「确定」清空已有任务并添加新任务\n` +
+                `点击「取消」放弃添加`
+            );
+            if (!ok) {
+                return;
+            }
+            this.tasks = [];
+        }
+        
         this.tasks.push(task);
         this.renderTaskList();
     },
@@ -279,16 +297,21 @@ const StrategyRunnerModule = {
         taskCount.textContent = this.tasks.length;
         startBtn.disabled = false;
         
-        taskBody.innerHTML = this.tasks.map((task, index) => `
-            <tr>
+        taskBody.innerHTML = this.tasks.map((task, index) => {
+            // 择时策略与首个任务不一致的行高亮提示
+            const mismatch = index > 0 && task.timing_strategy !== this.tasks[0].timing_strategy;
+            const rowStyle = mismatch ? 'background:#fef2f2;color:#b91c1c;' : '';
+            const warnIcon = mismatch ? ' ⚠️择时不一致' : '';
+            return `
+            <tr style="${rowStyle}">
                 <td>${index + 1}</td>
                 <td style="word-break:break-all;">${task.selection_strategy_display_name || task.selection_strategy}</td>
-                <td>${task.timing_strategy_display_name || task.timing_strategy}</td>
+                <td>${task.timing_strategy_display_name || task.timing_strategy}${warnIcon}</td>
                 <td style="text-align:center;">
                     <button class="btn btn-sm btn-outline-danger remove-task-btn" data-index="${index}">删除</button>
                 </td>
-            </tr>
-        `).join('');
+            </tr>`;
+        }).join('');
     },
     
     // 检查策略运行器状态
@@ -382,6 +405,18 @@ const StrategyRunnerModule = {
     startExecution: async function() {
         if (this.tasks.length === 0) {
             alert('请先添加执行任务');
+            return;
+        }
+        
+        // 择时策略一致性预检查（与后端校验保持一致，提前拦截并给出明确提示）
+        const timingSet = [...new Set(this.tasks.map(t => t.timing_strategy))];
+        if (timingSet.length > 1) {
+            this.appendLog('✗ 无法执行：任务列表中存在多个不同的择时策略');
+            this.tasks.forEach((t, i) => {
+                this.appendLog(`  任务${i + 1}: ${t.selection_strategy_display_name || t.selection_strategy} → 择时「${t.timing_strategy_display_name || t.timing_strategy}」`);
+            });
+            this.appendLog('请删除择时策略不一致的任务后重新执行');
+            alert('任务列表中存在多个不同的择时策略，请删除不一致的任务后重新执行。详情见执行日志。');
             return;
         }
         

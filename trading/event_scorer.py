@@ -307,6 +307,11 @@ class EventScorer:
                     socket.setdefaulttimeout(original_timeout)
             except Exception as e:
                 last_error = e
+                # 接口权限不足属于永久性错误，重试无意义，直接返回
+                if '没有接口' in str(e) or '访问权限' in str(e):
+                    logger.error(f"Tushare 接口无权限（不重试）: {e}")
+                    logger.info("将使用默认值继续处理...")
+                    return None
                 # 记录重试日志
                 logger.warning(
                     f"Tushare API 调用失败（第 {attempt + 1} 次）: {e}"

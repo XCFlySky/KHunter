@@ -1,0 +1,15 @@
+[Unit]
+Description=KHunter Web Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/khunter
+ExecStart=/opt/khunter/.venv/bin/python web_server.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/khunter/logs/web_service.log
+StandardError=append:/opt/khunter/logs/web_service.log
+
+[Install]
+WantedBy=multi-user.target

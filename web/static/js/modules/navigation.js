@@ -48,7 +48,8 @@ export function switchPage(page) {
         'backtest-history': '回测历史',
         'khunter': '狩猎场',
         'khunter-track': '狩猎跟踪',
-        'strategy-runner': '策略执行器'
+        'strategy-runner': '策略执行器',
+        'trend-animal': '趋势动物'
     };
     
     // 获取页面标题，如果不存在则使用默认标题
@@ -116,6 +117,9 @@ export function switchPage(page) {
             module.initKHunterTrackPage();
             module.setupKHunterTrackingEvents();
         });
+    } else if (page === 'trend-animal') {
+        // 趋势动物页面 - 初始化
+        import('./trend_animal.js').then(module => module.initTrendAnimal());
     } else if (page === 'strategy-runner') {
         // 策略执行器页面 - 初始化
         import('./strategy-runner.js').then(module => {

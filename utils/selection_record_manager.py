@@ -205,19 +205,28 @@ class SelectionRecordManager:
                     # 提取关键日期信息
                     key_dates = self._extract_key_dates(signal)
                     
-                    # 按股票代码分组
-                    if stock_code not in stock_map:
-                        # 计算策略数量：strategy_name 中 " + " 的个数 + 1
-                        strategy_count = strategy_name.count('+') + 1
-                        stock_map[stock_code] = {
-                            'stock_code': stock_code,
-                            'stock_name': signal.get('name', '未知'),
-                            'strategy_name': strategy_name,
-                            'industry': industry,
-                            'selection_price': selection_price,
-                            'key_dates': key_dates,
-                            'strategy_count': strategy_count
-                        }
+                    # 范围选股模式：信号可能带有实际信号日期列表（selected_dates），
+                    # 按各信号日期分别保存；单日模式使用统一的 selection_date
+                    signal_dates = signal.get('selected_dates')
+                    if not signal_dates or not isinstance(signal_dates, list):
+                        signal_dates = [None]
+                    
+                    # 按股票代码+日期分组
+                    for sig_date in signal_dates:
+                        map_key = (stock_code, sig_date)
+                        if map_key not in stock_map:
+                            # 计算策略数量：strategy_name 中 " + " 的个数 + 1
+                            strategy_count = strategy_name.count('+') + 1
+                            stock_map[map_key] = {
+                                'stock_code': stock_code,
+                                'stock_name': signal.get('name', '未知'),
+                                'strategy_name': strategy_name,
+                                'industry': industry,
+                                'selection_price': selection_price,
+                                'key_dates': key_dates,
+                                'strategy_count': strategy_count,
+                                'signal_date': sig_date
+                            }
                 except Exception as e:
                     logger.error(f"处理信号失败: {str(e)}")
                     stats['error'] += 1
@@ -232,15 +241,28 @@ class SelectionRecordManager:
                     selection_price = stock_info['selection_price']
                     key_dates = stock_info['key_dates']
                     
+                    # 范围选股模式：使用该股票的实际信号日期；单日模式用统一日期
+                    record_date = selection_date
+                    sig_date = stock_info.get('signal_date')
+                    if sig_date:
+                        try:
+                            record_date = datetime.strptime(str(sig_date)[:10], '%Y-%m-%d').date()
+                            # 使用该信号日期的收盘价作为选入价格
+                            date_price = self._get_stock_price(stock_code, record_date)
+                            if date_price:
+                                selection_price = date_price
+                        except Exception:
+                            record_date = selection_date
+                    
                     # 检查是否重复选入
-                    duplicate_info = self.check_duplicate(stock_code, selection_date)
+                    duplicate_info = self.check_duplicate(stock_code, record_date)
                     
                     if duplicate_info['is_duplicate']:
                         if duplicate_info['should_update']:
                             # 删除旧记录，保存新记录
-                            self.delete_old_record(stock_code, selection_date)
+                            self.delete_old_record(stock_code, record_date)
                             self._insert_record(strategy_name, stock_code, stock_name,
-                                              industry, selection_date, selection_time,
+                                              industry, record_date, selection_time,
                                               selection_price, key_dates, stock_info.get('strategy_count', 1))
                             stats['updated'] += 1
                         else:
@@ -249,7 +271,7 @@ class SelectionRecordManager:
                     else:
                         # 新股票，直接保存
                         self._insert_record(strategy_name, stock_code, stock_name,
-                                          industry, selection_date, selection_time,
+                                          industry, record_date, selection_time,
                                           selection_price, key_dates, stock_info.get('strategy_count', 1))
                         stats['saved'] += 1
                 except Exception as e:

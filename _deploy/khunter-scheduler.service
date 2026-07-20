@@ -1,0 +1,15 @@
+[Unit]
+Description=KHunter Daily Scheduler (17:00 update+selection+save)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/khunter
+ExecStart=/opt/khunter/.venv/bin/python daily_scheduler.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/opt/khunter/logs/scheduler_service.log
+StandardError=append:/opt/khunter/logs/scheduler_service.log
+
+[Install]
+WantedBy=multi-user.target

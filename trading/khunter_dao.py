@@ -42,7 +42,19 @@ class KHunterDAO:
         """
         # db_manager: 数据库管理器，类型object，必填
         self.db_manager = db_manager
+        self._migrate()
         logger.info("KHunter DAO 初始化完成")
+    
+    def _migrate(self):
+        """数据库迁移：为旧版 khunter 表补充缺失的 key_date 列"""
+        try:
+            columns = [row['name'] for row in self.db_manager.query(f"PRAGMA table_info({self.TABLE_NAME})")]
+            if columns and 'key_date' not in columns:
+                self.db_manager.execute(f"ALTER TABLE {self.TABLE_NAME} ADD COLUMN key_date DATE")
+                logger.info("数据库迁移：khunter 表添加 key_date 字段")
+        except Exception as e:
+            # 表不存在等场景由后续建表流程处理，这里仅记录
+            logger.warning(f"khunter 表迁移检查失败（可忽略）: {e}")
     
     # ==================== 公开方法 ====================
     

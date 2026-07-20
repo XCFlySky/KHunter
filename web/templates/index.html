@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>形态猎手-KHunter</title>
     <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
-    <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="stylesheet" href="/static/css/khunter.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260723">
+    <link rel="stylesheet" href="/static/css/khunter.css?v=20260723">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* 响应式设计 */
@@ -226,8 +226,21 @@
 </head>
 <body>
     <div class="container">
+        <!-- 手机端菜单按钮和遮罩 -->
+        <button id="mobile-menu-btn" aria-label="菜单">☰</button>
+        <div id="mobile-backdrop"></div>
+
+        <!-- 手机端底部导航栏 -->
+        <nav id="mobile-tabbar">
+            <button class="tab-item" data-page="dashboard"><span class="tab-icon">🏠</span><span>速览</span></button>
+            <button class="tab-item" data-page="selection"><span class="tab-icon">⚡</span><span>选股</span></button>
+            <button class="tab-item" data-page="khunter"><span class="tab-icon">🎯</span><span>狩猎场</span></button>
+            <button class="tab-item" data-page="trend-animal"><span class="tab-icon">🐯</span><span>趋势</span></button>
+            <button class="tab-item" id="tab-menu-btn"><span class="tab-icon">☰</span><span>更多</span></button>
+        </nav>
+
         <!-- 侧边栏 -->
-        <nav class="sidebar">
+        <nav class="sidebar" id="sidebar">
             <div class="logo">
                 <img src="/static/images/logo.svg" alt="KHunter Logo" class="logo-img" style="width: 60px; height: 60px; margin-bottom: 10px;">
                 <h1>形态猎手KHunter</h1>
@@ -267,6 +280,9 @@
                 </li>
                 <li class="nav-item" data-page="ranking-track">
                     <span class="icon">📉</span> 排名跟踪
+                </li>
+                <li class="nav-item" data-page="trend-animal">
+                    <span class="icon">🐯</span> 趋势动物
                 </li>
                 
                 <!-- 回测管理 -->
@@ -450,6 +466,10 @@
                             </table>
                         </div>
                     </div>
+                </div>
+
+                <!-- 趋势动物页（内容由 trend_animal.js 渲染） -->
+                <div id="trend-animal-page" class="page">
                 </div>
 
                 <!-- 初始化数据页 -->
@@ -1797,11 +1817,17 @@
                 <!-- 隐藏的逻辑选择器，默认使用 OR -->
                 <input type="hidden" name="logic" value="or">
                 
-                <div class="date-selector" style="margin-bottom: 20px; display: flex; gap: 12px; align-items: center;">
+                <div class="date-selector" style="margin-bottom: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                    <label style="font-weight: 600; white-space: nowrap;" title="留空则仅按选股日期单日选股；填写后将对该日期范围内的每个交易日分别选股">开始日期：</label>
+                    <input type="date" id="selection-start-date" value="" title="留空则仅按选股日期单日选股；填写后将对该日期范围内的每个交易日分别选股（最多30个交易日）" style="padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; width: 140px;">
                     <label style="font-weight: 600; white-space: nowrap;">选股日期：</label>
                     <input type="date" id="selection-date" value="" style="padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; font-size: 14px; width: 140px;">
                     <button class="btn btn-sm" onclick="selectAllStrategies()" style="padding: 8px 16px; background-color: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; white-space: nowrap;">全选</button>
                     <button class="btn btn-sm" onclick="deselectAllStrategies()" style="padding: 8px 16px; background-color: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; white-space: nowrap;">反选</button>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 14px; white-space: nowrap; cursor: pointer;" title="选中后将在结果中展示所有未选中股票及未满足条件的原因（数据量较大，可能稍慢）">
+                        <input type="checkbox" id="include-diagnostics">
+                        显示未选中股票及原因
+                    </label>
                 </div>
                 <div class="strategy-list" id="strategy-list">
                     <!-- 动态生成 -->
@@ -1954,12 +1980,12 @@
         </div>
     </div>
 
-    <script src="/static/js/dashboard_stats.js"></script>
-    <script type="module" src="/static/js/app.js?v=14"></script>
-    <script src="/static/js/kline_chart.js"></script>
-    <script src="/static/js/init_simple.js?v=2"></script>
-    <script src="/static/js/trading.js"></script>
-    <script src="/static/js/data_update.js"></script>
+    <script src="/static/js/dashboard_stats.js?v=20260723"></script>
+    <script type="module" src="/static/js/app.js?v=20260723"></script>
+    <script src="/static/js/kline_chart.js?v=20260723"></script>
+    <script src="/static/js/init_simple.js?v=20260723"></script>
+    <script src="/static/js/trading.js?v=20260723"></script>
+    <script src="/static/js/data_update.js?v=20260723"></script>
     
     <!-- 回测结果模态框 -->
     <div id="backtest-result-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4);">
@@ -2280,5 +2306,49 @@
             </div>
         </div>
     </div>
+    <script>
+    // 手机端抽屉菜单 + 底部导航栏
+    (function () {
+        var btn = document.getElementById('mobile-menu-btn');
+        var sidebar = document.getElementById('sidebar');
+        var backdrop = document.getElementById('mobile-backdrop');
+        if (!btn || !sidebar || !backdrop) return;
+        function openMenu() { sidebar.classList.add('open'); backdrop.classList.add('show'); }
+        function closeMenu() { sidebar.classList.remove('open'); backdrop.classList.remove('show'); }
+        btn.addEventListener('click', function () {
+            sidebar.classList.contains('open') ? closeMenu() : openMenu();
+        });
+        backdrop.addEventListener('click', closeMenu);
+        sidebar.querySelectorAll('.nav-item').forEach(function (item) {
+            item.addEventListener('click', closeMenu);
+        });
+
+        var tabbar = document.getElementById('mobile-tabbar');
+        if (tabbar) {
+            tabbar.querySelectorAll('.tab-item[data-page]').forEach(function (tab) {
+                tab.addEventListener('click', function () {
+                    var target = document.querySelector('.nav-item[data-page="' + tab.dataset.page + '"]');
+                    if (target) target.click();
+                    closeMenu();
+                    syncTabbar();
+                });
+            });
+            var menuTab = document.getElementById('tab-menu-btn');
+            if (menuTab) menuTab.addEventListener('click', openMenu);
+
+            function syncTabbar() {
+                var active = document.querySelector('.nav-item.active');
+                var page = active ? active.dataset.page : '';
+                tabbar.querySelectorAll('.tab-item[data-page]').forEach(function (tab) {
+                    tab.classList.toggle('active', tab.dataset.page === page);
+                });
+            }
+            sidebar.querySelectorAll('.nav-item').forEach(function (item) {
+                item.addEventListener('click', function () { setTimeout(syncTabbar, 50); });
+            });
+            syncTabbar();
+        }
+    })();
+    </script>
 </body>
 </html>

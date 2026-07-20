@@ -56,6 +56,12 @@ export function showStrategySelectionModal(strategies) {
         selectionDateInput.value = today;
     }
     
+    // 开始日期默认留空（单日模式）
+    const startDateInput = document.querySelector('#strategy-selection-modal #selection-start-date');
+    if (startDateInput) {
+        startDateInput.value = '';
+    }
+    
     modal.classList.add('active');
 }
 
@@ -96,8 +102,24 @@ export async function confirmStrategySelection() {
     }
 
     console.log('最终选股日期:', selectionDate);
+    
+    // 是否显示未选中股票及原因
+    const diagCheckbox = document.querySelector('#strategy-selection-modal #include-diagnostics');
+    const includeDiagnostics = diagCheckbox ? diagCheckbox.checked : false;
+    
+    // 开始日期（可选，提供则为日期范围选股）
+    const startDateInput = document.querySelector('#strategy-selection-modal #selection-start-date');
+    let startDate = null;
+    if (startDateInput && startDateInput.value) {
+        startDate = startDateInput.value;
+        if (selectionDate && startDate >= selectionDate) {
+            alert('开始日期必须早于选股日期（不需要范围选股时请留空开始日期）');
+            return;
+        }
+    }
+    
     closeStrategyModal();
-    executeSelectionWithStrategies(strategies, logic, selectionDate);
+    executeSelectionWithStrategies(strategies, logic, selectionDate, includeDiagnostics, startDate);
 }
 
 /**
@@ -128,8 +150,10 @@ export function deselectAllStrategies() {
  * @param {Array} strategies - 策略列表
  * @param {string} logic - 逻辑（OR/AND）
  * @param {string} selectionDate - 选股日期，格式为YYYY-MM-DD，null表示使用最新数据
+ * @param {boolean} includeDiagnostics - 是否返回未选中股票及原因
+ * @param {string} startDate - 开始日期（可选，提供则为日期范围选股）
  */
-export async function executeSelectionWithStrategies(strategies, logic = 'or', selectionDate = null) {
+export async function executeSelectionWithStrategies(strategies, logic = 'or', selectionDate = null, includeDiagnostics = false, startDate = null) {
     // 缓存选股日期，供手动保存使用
     lastSelectionDate = selectionDate;
     
@@ -151,7 +175,10 @@ export async function executeSelectionWithStrategies(strategies, logic = 'or', s
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10800000);
         
-        const requestBody = { strategies: strategies, logic: logic, end_date: selectionDate };
+        const requestBody = { strategies: strategies, logic: logic, end_date: selectionDate, include_diagnostics: includeDiagnostics };
+        if (startDate) {
+            requestBody.start_date = startDate;
+        }
         console.log('发送请求体:', JSON.stringify(requestBody));
         
         const response = await fetch('/api/select', {
@@ -517,6 +544,23 @@ export function renderSelectionResults(results, time, filterStats, strategyDispl
         delete results._intersection;
     }
     
+    // 提取未选中股票诊断信息（不参布后续渲染和保存）
+    let diagnostics = null;
+    if (results._diagnostics) {
+        diagnostics = results._diagnostics;
+        delete results._diagnostics;
+    }
+    
+    // 提取按日期分组结果（日期范围选股模式）
+    let byDate = null;
+    if (results._by_date) {
+        byDate = results._by_date;
+        delete results._by_date;
+    }
+    
+    // 重置诊断块状态（避免上一次选股的残留）
+    diagState = {};
+    
     // 处理交集结果（AND逻辑）
     if (intersectionStocks && Array.isArray(intersectionStocks)) {
         totalCount = intersectionStocks.length;
@@ -735,7 +779,20 @@ export function renderSelectionResults(results, time, filterStats, strategyDispl
         }
     }
     
+    // 追加未选中股票诊断区域
+    if (diagnostics) {
+        html += renderSelectionDiagnostics(diagnostics);
+    }
+    
+    // 追加按日期分组展示区域（日期范围选股模式）
+    if (byDate) {
+        html += renderByDateSections(byDate);
+    }
+    
     container.innerHTML = html;
+    
+    // 渲染诊断区域的表格内容（需在 innerHTML 之后执行）
+    initDiagnosticsTables();
     
     // 显示过滤统计信息
     if (filterStats && filterStats.enabled) {
@@ -773,4 +830,287 @@ export function renderSelectionResults(results, time, filterStats, strategyDispl
         // 添加到容器的末尾
         container.insertAdjacentHTML('beforeend', filterHtml);
     }
+}
+
+
+// ==================== 未选中股票诊断区域 ====================
+
+// 诊断块状态（模块级缓存），key 为块ID（支持按日期前缀区分多个块）
+let diagState = {};  // key -> { reason, search, page, data }
+const DIAG_PAGE_SIZE = 50;
+
+/**
+ * HTML转义，防止名称中的特殊字符破坏页面
+ */
+function escapeHtml(text) {
+    if (text === null || text === undefined) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * 渲染未选中股票诊断区域（每个策略一个折叠块）
+ * @param {Object} diagnostics - 诊断数据 {策略中文名: {total_analyzed, selected, rejected_count, reason_stats, rejected}}
+ * @param {string} keyPrefix - 块ID前缀（按日期展示时用于区分不同日期的块）
+ */
+export function renderSelectionDiagnostics(diagnostics, keyPrefix = '') {
+    const keys = Object.keys(diagnostics);
+    if (keys.length === 0) return '';
+
+    // 无前缀（单日模式）时显示标题；按日期嵌套时省略标题
+    let html = keyPrefix === '' ? '<div class="diag-section"><h3 style="margin: 24px 0 12px;">🔍 未选中股票诊断</h3>' : '';
+
+    keys.forEach((strategyName, i) => {
+        const diag = diagnostics[strategyName];
+        const key = keyPrefix + 'diag_' + i;
+        diagState[key] = { reason: null, search: '', page: 1, data: diag };
+
+        // 原因统计 chips（按数量降序）
+        const reasonStats = diag.reason_stats || {};
+        const sortedReasons = Object.entries(reasonStats).sort((a, b) => b[1] - a[1]);
+        const chipsHtml = sortedReasons.map(([reason, count]) => {
+            return '<span class="diag-reason-chip" data-key="' + key + '" data-reason="' + escapeHtml(reason) + '" onclick="toggleDiagReasonFilter(this)">'
+                + escapeHtml(reason) + ' <b>(' + count + ')</b></span>';
+        }).join('');
+
+        html += `
+            <details class="diag-block" id="${key}-block">
+                <summary>
+                    <strong>${escapeHtml(strategyName)}</strong>
+                    — 共分析 ${diag.total_analyzed} 只，选中 <span style="color:#16a34a">${diag.selected}</span> 只，
+                    未选中 <span style="color:#dc2626">${diag.rejected_count}</span> 只（点击展开）
+                </summary>`;
+        html += `
+                <div class="diag-content">
+                    <div class="diag-chips">
+                        <span style="font-size:13px;color:#6b7280;">原因统计（点击筛选）:</span>
+                        ${chipsHtml}
+                    </div>
+                    <div class="diag-toolbar">
+                        <input type="text" class="diag-search" id="${key}-search" placeholder="搜索代码/名称..."
+                               oninput="onDiagSearch('${key}', this.value)">
+                        <span class="diag-count" id="${key}-count"></span>
+                    </div>
+                    <table class="diag-table">
+                        <thead>
+                            <tr><th style="width:100px;">代码</th><th style="width:140px;">名称</th><th>未满足原因</th></tr>
+                        </thead>
+                        <tbody id="${key}-tbody"></tbody>
+                    </table>
+                    <div class="diag-pagination" id="${key}-pagination"></div>
+                </div>
+            </details>`;
+    });
+
+    if (keyPrefix === '') html += '</div>';
+    return html;
+}
+
+/**
+ * 在 innerHTML 渲染后初始化所有诊断表格
+ */
+export function initDiagnosticsTables() {
+    Object.keys(diagState).forEach(key => {
+        renderDiagTable(key);
+    });
+}
+
+/**
+ * 获取诊断数据（按 key 找到对应块的数据）
+ */
+function getDiagByKey(key) {
+    const state = diagState[key];
+    return state ? state.data : null;
+}
+
+/**
+ * 将原因文本归一化为类别（与后端 reason_stats 的归类逻辑一致）
+ */
+function normalizeDiagReason(reason) {
+    return (reason || '').split('（')[0].split('，')[0].replace(/(?<![A-Za-z0-9])\d+\.?\d*/g, 'N');
+}
+
+/**
+ * 获取过滤后的未选中股票列表
+ */
+function getFilteredRejected(key) {
+    const diag = getDiagByKey(key);
+    if (!diag || !Array.isArray(diag.rejected)) return [];
+    const state = diagState[key];
+    let list = diag.rejected;
+
+    if (state.reason) {
+        // 原因统计分类是归一化后的类别，按类别匹配
+        list = list.filter(item => normalizeDiagReason(item.reason) === state.reason);
+    }
+    if (state.search) {
+        const q = state.search.toLowerCase();
+        list = list.filter(item =>
+            (item.code || '').toLowerCase().includes(q) ||
+            (item.name || '').toLowerCase().includes(q)
+        );
+    }
+    return list;
+}
+
+/**
+ * 渲染某个策略的诊断表格（当前页）
+ */
+function renderDiagTable(key) {
+    const tbody = document.getElementById(key + '-tbody');
+    const countEl = document.getElementById(key + '-count');
+    const paginationEl = document.getElementById(key + '-pagination');
+    if (!tbody) return;
+
+    const state = diagState[key];
+    const list = getFilteredRejected(key);
+    const totalPages = Math.max(1, Math.ceil(list.length / DIAG_PAGE_SIZE));
+    if (state.page > totalPages) state.page = totalPages;
+
+    const start = (state.page - 1) * DIAG_PAGE_SIZE;
+    const pageItems = list.slice(start, start + DIAG_PAGE_SIZE);
+
+    tbody.innerHTML = pageItems.map(item => `
+        <tr>
+            <td>${escapeHtml(item.code)}</td>
+            <td><a href="javascript:void(0)" onclick="viewStockDetail('${escapeHtml(item.code)}')" class="stock-link">${escapeHtml(item.name)}</a></td>
+            <td class="diag-reason-cell">${escapeHtml(item.reason)}</td>
+        </tr>
+    `).join('') || '<tr><td colspan="3" style="text-align:center;color:#9ca3af;">无匹配数据</td></tr>';
+
+    if (countEl) {
+        countEl.textContent = '共 ' + list.length + ' 只';
+    }
+
+    // 分页控件
+    if (paginationEl) {
+        if (totalPages <= 1) {
+            paginationEl.innerHTML = '';
+        } else {
+            paginationEl.innerHTML = `
+                <button class="diag-page-btn" ${state.page <= 1 ? 'disabled' : ''} onclick="gotoDiagPage('${key}', ${state.page - 1})">上一页</button>
+                <span style="margin: 0 10px;">${state.page} / ${totalPages}</span>
+                <button class="diag-page-btn" ${state.page >= totalPages ? 'disabled' : ''} onclick="gotoDiagPage('${key}', ${state.page + 1})">下一页</button>`;
+        }
+    }
+}
+
+/**
+ * 翻页
+ */
+export function gotoDiagPage(key, page) {
+    if (!diagState[key]) return;
+    diagState[key].page = page;
+    renderDiagTable(key);
+}
+
+/**
+ * 搜索
+ */
+export function onDiagSearch(key, value) {
+    if (!diagState[key]) return;
+    diagState[key].search = (value || '').trim();
+    diagState[key].page = 1;
+    renderDiagTable(key);
+}
+
+/**
+ * 点击原因 chip 切换筛选
+ */
+export function toggleDiagReasonFilter(chipEl) {
+    const key = chipEl.getAttribute('data-key');
+    const reason = chipEl.getAttribute('data-reason');
+    if (!diagState[key]) return;
+
+    const block = document.getElementById(key + '-block');
+    if (diagState[key].reason === reason) {
+        // 再次点击取消筛选
+        diagState[key].reason = null;
+        if (block) {
+            block.querySelectorAll('.diag-reason-chip').forEach(c => c.classList.remove('active'));
+        }
+    } else {
+        diagState[key].reason = reason;
+        if (block) {
+            block.querySelectorAll('.diag-reason-chip').forEach(c => {
+                c.classList.toggle('active', c.getAttribute('data-reason') === reason);
+            });
+        }
+    }
+    diagState[key].page = 1;
+    renderDiagTable(key);
+}
+
+
+// ==================== 按日期分组展示（日期范围选股） ====================
+
+/**
+ * 渲染按日期分组的选股结果
+ * @param {Object} byDate - { 'YYYY-MM-DD': { '策略中文名': [signals], '_diagnostics': {...} } }
+ */
+export function renderByDateSections(byDate) {
+    const dates = Object.keys(byDate).sort().reverse();  // 最新日期在前
+    if (dates.length === 0) return '';
+
+    let html = '<div class="diag-section"><h3 style="margin: 24px 0 12px;">📅 按日期展示（共 ' + dates.length + ' 个交易日）</h3>';
+
+    dates.forEach(date => {
+        const dayData = byDate[date] || {};
+        let total = 0;
+        let inner = '';
+        let dayDiag = null;
+
+        for (const [strategyName, signals] of Object.entries(dayData)) {
+            if (strategyName === '_diagnostics') {
+                dayDiag = signals;
+                continue;
+            }
+            if (Array.isArray(signals)) {
+                total += signals.length;
+                inner += renderDayStrategyBlock(strategyName, signals);
+            }
+        }
+
+        if (!inner) {
+            inner = '<p class="text-muted" style="margin: 8px 0;">当日无选中股票</p>';
+        }
+
+        // 当日诊断（未选中股票及原因）
+        if (dayDiag) {
+            const keyPrefix = 'd' + date.replace(/-/g, '') + '_';
+            inner += renderSelectionDiagnostics(dayDiag, keyPrefix);
+        }
+
+        html += '<details class="diag-block">'
+            + '<summary><strong>' + escapeHtml(date) + '</strong> — 选中 <span style="color:#16a34a">' + total + '</span> 只（点击展开）</summary>'
+            + '<div class="diag-content">' + inner + '</div>'
+            + '</details>';
+    });
+
+    html += '</div>';
+    return html;
+}
+
+/**
+ * 渲染某日某策略的选股结果卡片
+ */
+function renderDayStrategyBlock(strategyName, signals) {
+    if (!Array.isArray(signals) || signals.length === 0) return '';
+
+    let html = '<div class="selection-strategy" style="margin-top: 8px;"><h4>' + escapeHtml(strategyName) + ' (' + signals.length + '只)</h4>';
+
+    html += signals.map(signal => {
+        if (!signal || typeof signal !== 'object') return '';
+        const s = signal.signals && Array.isArray(signal.signals) && signal.signals[0] ? signal.signals[0] : {};
+        const reasons = s.reasons && Array.isArray(s.reasons) ? s.reasons.map(r => '<span class="tag">' + escapeHtml(r) + '</span>').join('') : '';
+        const keyDate = s.key_date ? '<span class="tag">' + escapeHtml(s.key_date_type || '') + ': ' + escapeHtml(s.key_date) + '</span>' : '';
+        return '<div class="signal-card"><div class="signal-header"><span class="signal-title"><a href="javascript:void(0)" onclick="viewStockDetail(\'' + escapeHtml(signal.code) + '\')" class="stock-link">' + escapeHtml(signal.code) + ' ' + escapeHtml(signal.name) + '</a></span><div class="signal-tags">' + keyDate + reasons + '</div></div></div>';
+    }).join('');
+
+    html += '</div>';
+    return html;
 }

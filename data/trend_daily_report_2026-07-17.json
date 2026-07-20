@@ -1,0 +1,398 @@
+{
+ "built_at": "2026-07-20 02:28:53",
+ "update_status": [
+  {
+   "tmId": 303121,
+   "tickerCount": 5599,
+   "assetCategory": "金融资产",
+   "tickerName": "A股",
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-17 16:30:00"
+  },
+  {
+   "tmId": 377042,
+   "tickerCount": 2132,
+   "assetCategory": "金融资产",
+   "tickerName": "ETF基金",
+   "asset": "ETF基金",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-17 16:30:00"
+  },
+  {
+   "tmId": 332171,
+   "tickerCount": 5344,
+   "assetCategory": "金融资产",
+   "tickerName": "美股",
+   "asset": "美股",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-18 07:22:00"
+  },
+  {
+   "tmId": 300144,
+   "tickerCount": 949,
+   "assetCategory": "金融资产",
+   "tickerName": "商品期货",
+   "asset": "商品期货",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-17 17:43:00"
+  },
+  {
+   "tmId": 329480,
+   "tickerCount": 2631,
+   "assetCategory": "金融资产",
+   "tickerName": "港股",
+   "asset": "港股",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-17 17:43:00"
+  },
+  {
+   "tmId": 327801,
+   "tickerCount": 406,
+   "assetCategory": "金融资产",
+   "tickerName": "加密币",
+   "asset": "加密币",
+   "asOfDate": "2026-07-18",
+   "updateDt": "2026-07-19 08:50:00"
+  },
+  {
+   "tmId": 450850,
+   "tickerCount": 1,
+   "assetCategory": "金融资产",
+   "tickerName": "现金",
+   "asset": "现金",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-18 07:22:00"
+  },
+  {
+   "tmId": 704988,
+   "tickerCount": 419,
+   "assetCategory": "金融资产",
+   "tickerName": "美国ETF",
+   "asset": "美国ETF",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-18 07:22:00"
+  },
+  {
+   "tmId": 705189,
+   "tickerCount": 51,
+   "assetCategory": "金融资产",
+   "tickerName": "香港ETF",
+   "asset": "香港ETF",
+   "asOfDate": "2026-07-17",
+   "updateDt": "2026-07-17 17:43:00"
+  }
+ ],
+ "market": [
+  {
+   "name": "A股",
+   "industryName": "金融资产",
+   "tmId": 303121,
+   "assetCategory": "金融资产",
+   "return1d": -0.036,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "寒",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "A股",
+   "trendPhaseCurr": "冬至",
+   "isTrendRightSide": false,
+   "trendTemperatureCurr": "寒",
+   "trendStrengthGlobalCurr": 24.56,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": -0.0944
+  },
+  {
+   "name": "ETF基金",
+   "industryName": "金融资产",
+   "tmId": 377042,
+   "assetCategory": "金融资产",
+   "return1d": -0.0325,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "凉",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "ETF基金",
+   "trendPhaseCurr": "立冬",
+   "isTrendRightSide": false,
+   "trendTemperatureCurr": "寒",
+   "trendStrengthGlobalCurr": 35.4,
+   "asset": "ETF基金",
+   "asOfDate": "2026-07-17",
+   "return1m": -0.0607
+  }
+ ],
+ "hot_stocks": [
+  {
+   "industryName": "中药",
+   "tmId": 306172,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600436.SH",
+   "return1d": 0.0388,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": true,
+   "tickerName": "片仔癀",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "沸",
+   "trendStrengthGlobalCurr": 96.1,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.2989
+  },
+  {
+   "industryName": "通信设备",
+   "tmId": 307576,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "002396.SZ",
+   "return1d": 0.0505,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "星网锐捷",
+   "trendPhaseCurr": "夏至",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 95.81,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.502
+  },
+  {
+   "industryName": "电力",
+   "tmId": 308020,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600900.SH",
+   "return1d": 0.0197,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "长江电力",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 94.13,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.0801
+  },
+  {
+   "industryName": "基础耗材",
+   "tmId": 308119,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "301092.SZ",
+   "return1d": 0.1113,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "争光股份",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 93.68,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.1824
+  },
+  {
+   "industryName": "电力",
+   "tmId": 303724,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600674.SH",
+   "return1d": 0.0207,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "川投能源",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 93.62,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.1034
+  },
+  {
+   "industryName": "环保设备",
+   "tmId": 305855,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "300105.SZ",
+   "return1d": 0.0872,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "龙源技术",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 93.47,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.2963
+  },
+  {
+   "industryName": "公用事业",
+   "tmId": 307588,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "000598.SZ",
+   "return1d": 0.0087,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "兴蓉环境",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 93.43,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.0638
+  },
+  {
+   "industryName": "综合企业",
+   "tmId": 307659,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600881.SH",
+   "return1d": 0.1006,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "亚泰集团",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 92.04,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.2237
+  },
+  {
+   "industryName": "服装纺织",
+   "tmId": 307635,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600177.SH",
+   "return1d": 0.0168,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "雅戈尔",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 91.33,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.0721
+  }
+ ],
+ "hot_etfs": [
+  {
+   "industryName": "ETF基金",
+   "tmId": 329461,
+   "assetCategory": "金融资产",
+   "return1d": 0.0002,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "公司债ETF",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 96.63,
+   "asset": "ETF基金",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.0016
+  },
+  {
+   "industryName": "ETF基金",
+   "tmId": 622455,
+   "assetCategory": "金融资产",
+   "return1d": 0.0002,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": false,
+   "tickerName": "科创债ETF",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "热",
+   "trendStrengthGlobalCurr": 96.55,
+   "asset": "ETF基金",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.0015
+  }
+ ],
+ "risk_watch": [
+  {
+   "industryName": "中药",
+   "tmId": 306172,
+   "assetCategory": "金融资产",
+   "tickerSymbol": "600436.SH",
+   "return1d": 0.0388,
+   "stopwinFlagByDangerSignal": false,
+   "stopwinFlagByPopChampagne": false,
+   "trendTemperaturePrev": "温",
+   "stopwinFlagByBoilingTemperature": true,
+   "tickerName": "片仔癀",
+   "trendPhaseCurr": "立夏",
+   "isTrendRightSide": true,
+   "trendTemperatureCurr": "沸",
+   "trendStrengthGlobalCurr": 96.1,
+   "asset": "A股",
+   "asOfDate": "2026-07-17",
+   "return1m": 0.2989,
+   "risk_flags": [
+    "沸"
+   ]
+  }
+ ],
+ "main_industries": [
+  {
+   "industry": "电力",
+   "count": 2
+  },
+  {
+   "industry": "中药",
+   "count": 1
+  },
+  {
+   "industry": "通信设备",
+   "count": 1
+  },
+  {
+   "industry": "基础耗材",
+   "count": 1
+  },
+  {
+   "industry": "环保设备",
+   "count": 1
+  },
+  {
+   "industry": "公用事业",
+   "count": 1
+  },
+  {
+   "industry": "综合企业",
+   "count": 1
+  },
+  {
+   "industry": "服装纺织",
+   "count": 1
+  }
+ ],
+ "cost_note": "成分查询0.2元 + 快照约0.48元（13行×0.037元/行），每日首次构建时产生，重复打开走缓存不计费",
+ "as_of_date": "2026-07-17",
+ "from_cache": false
+}

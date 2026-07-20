@@ -132,6 +132,10 @@ async function initializeApp() {
     window.selectAllStrategies = modules.selection.selectAllStrategies;
     window.deselectAllStrategies = modules.selection.deselectAllStrategies;
     window.saveSelectionResults = modules.selection.saveSelectionResults;
+    // 未选中股票诊断区域交互函数
+    window.gotoDiagPage = modules.selection.gotoDiagPage;
+    window.onDiagSearch = modules.selection.onDiagSearch;
+    window.toggleDiagReasonFilter = modules.selection.toggleDiagReasonFilter;
     window.viewStockDetail = modules.stocks.viewStockDetail;
     window.closeModal = modules.stocks.closeModal;
     window.triggerUpdate = triggerUpdate;

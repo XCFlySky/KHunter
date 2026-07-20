@@ -1,0 +1,6 @@
+{
+    "api_key": "sk-BEFD31BC08CD499B9B56B0AC5BC19A9D",
+    "base_url": "https://www.trendtrader.cn/apiData/data",
+    "timeout": 20,
+    "comment": "趋势动物API配置。apiKey仅服务端使用，严禁写入前端/日志/公开仓库"
+}

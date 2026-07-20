@@ -99,6 +99,8 @@ class IndexDataFetcher:
             logger.info(f"获取{self.index_name}指数数据: {start_date} ~ {end_date}")
             
             # 初始化tushare
+            from utils.tushare_helper import ensure_tushare_token
+            ensure_tushare_token()
             pro = ts.pro_api()
             
             # tushare指数数据接口（使用完整ts_code，如 932000.CSI / 000852.SH）
