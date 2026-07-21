@@ -145,6 +145,126 @@ export function deselectAllStrategies() {
     checkboxes.forEach(cb => cb.checked = !cb.checked);
 }
 
+const PENDING_SELECTION_KEY = 'khunter_pending_selection_task';
+
+/**
+ * 记录/清除未完成的选股任务（用于页面刷新后恢复）
+ */
+function savePendingSelectionTask(taskId) {
+    try { sessionStorage.setItem(PENDING_SELECTION_KEY, JSON.stringify({ task_id: taskId, started: Date.now() })); } catch (e) {}
+}
+
+function clearPendingSelectionTask() {
+    try { sessionStorage.removeItem(PENDING_SELECTION_KEY); } catch (e) {}
+}
+
+/**
+ * 应用选股结果：缓存、显示按钮并渲染到页面（执行完成/断线恢复共用）
+ */
+function applySelectionResult(result) {
+    console.log('选股成功，数据类型:', typeof result.data);
+    console.log('选股结果键:', Object.keys(result.data || {}));
+    // 缓存选股结果，供手动保存和导出使用
+    lastSelectionResults = result.data;
+    lastSelectionTime = result.time;
+    lastSelectionDate = result.selection_date || result.time.split(' ')[0];
+    
+    // 显示选股日期
+    const selectionDateEl = document.getElementById('selection-date-display');
+    if (selectionDateEl) {
+        selectionDateEl.textContent = `选股日期: ${lastSelectionDate}`;
+    }
+    
+    // 显示导出和保存按钮
+    const exportBtn = document.getElementById('export-selection-btn');
+    if (exportBtn) {
+        exportBtn.style.display = '';
+        exportBtn.disabled = false;
+    }
+    const saveBtn = document.getElementById('save-selection-btn');
+    if (saveBtn) {
+        saveBtn.style.display = '';
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = '<span class="icon">💾</span> 保存结果';
+        saveBtn.classList.remove('btn-success');
+    }
+    renderSelectionResults(result.data, result.time, result.filter_stats, result.strategy_display_names);
+}
+
+/**
+ * 页面刷新/重新打开时，若有未完成的选股任务则恢复轮询，完成后自动显示结果
+ */
+export async function resumePendingSelection() {
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem(PENDING_SELECTION_KEY) || 'null'); } catch (e) {}
+    if (!pending || !pending.task_id) return;
+    // 超过3小时的任务视为已过期
+    if (Date.now() - (pending.started || 0) > 3 * 3600 * 1000) {
+        clearPendingSelectionTask();
+        return;
+    }
+    
+    const resultsEl = document.getElementById('selection-results');
+    if (!resultsEl) return;
+    const indicator = document.getElementById('status-indicator');
+    const btn = document.getElementById('run-selection-btn');
+    
+    console.log('恢复未完成的选股任务:', pending.task_id);
+    resultsEl.innerHTML = '<p class="loading">选股任务正在后台执行，请稍候（网络波动不影响执行）...</p>';
+    if (indicator) indicator.innerHTML = '<span class="dot yellow"></span> 运行中';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="icon">⏳</span> 选股中...'; }
+    
+    const result = await pollSelectionResult(pending.task_id);
+    clearPendingSelectionTask();
+    
+    if (result.success) {
+        applySelectionResult(result);
+    } else {
+        resultsEl.innerHTML = `<p class="loading text-danger">选股失败: ${result.error || '未知错误'}</p>`;
+    }
+    if (indicator) indicator.innerHTML = '<span class="dot green"></span> 就绪';
+    if (btn) { btn.disabled = false; btn.innerHTML = '<span class="icon">▶️</span> 执行选股'; }
+}
+
+/**
+ * 轮询异步选股任务结果
+ * @param {string} taskId - 任务ID
+ * @returns {Object} 选股结果（与同步接口返回结构一致）
+ */
+async function pollSelectionResult(taskId) {
+    const interval = 5000;          // 每5秒轮询一次
+    const maxWait = 3 * 3600 * 1000; // 最长等待3小时
+    const start = Date.now();
+    let consecutiveErrors = 0;
+    
+    while (Date.now() - start < maxWait) {
+        await new Promise(r => setTimeout(r, interval));
+        try {
+            const resp = await fetch(`/api/select/result/${taskId}`);
+            const data = await resp.json();
+            consecutiveErrors = 0;
+            if (!data.success) {
+                return { success: false, error: data.error || '任务查询失败' };
+            }
+            if (data.status === 'running') {
+                continue;
+            }
+            if (data.status === 'done') {
+                return data.result || { success: false, error: '结果为空' };
+            }
+            return { success: false, error: data.error || '选股执行失败' };
+        } catch (e) {
+            // 网络瞬时异常（如切换网络/锁屏）不直接失败，继续重试
+            consecutiveErrors++;
+            console.warn(`轮询选股结果失败(第${consecutiveErrors}次):`, e.message);
+            if (consecutiveErrors >= 12) {
+                return { success: false, error: '网络连接异常，请刷新页面后查看选股结果' };
+            }
+        }
+    }
+    return { success: false, error: '选股超时：任务耗时过长' };
+}
+
 /**
  * 执行选股（指定策略和逻辑）
  * @param {Array} strategies - 策略列表
@@ -175,7 +295,7 @@ export async function executeSelectionWithStrategies(strategies, logic = 'or', s
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10800000);
         
-        const requestBody = { strategies: strategies, logic: logic, end_date: selectionDate, include_diagnostics: includeDiagnostics };
+        const requestBody = { strategies: strategies, logic: logic, end_date: selectionDate, include_diagnostics: includeDiagnostics, async: true };
         if (startDate) {
             requestBody.start_date = startDate;
         }
@@ -219,34 +339,19 @@ export async function executeSelectionWithStrategies(strategies, logic = 'or', s
             throw new Error('服务器返回的数据格式错误: ' + parseError.message);
         }
         
+        // 异步模式：服务器立即返回 task_id，改为轮询获取最终结果（避免长连接被移动网络掐断）
+        if (result.success && result.async && result.task_id) {
+            console.log('选股任务已在后台运行, task_id:', result.task_id);
+            document.getElementById('selection-results').innerHTML = 
+                '<p class="loading">选股任务正在后台执行，请稍候（网络波动不影响执行）...</p>';
+            savePendingSelectionTask(result.task_id);
+            result = await pollSelectionResult(result.task_id);
+            clearPendingSelectionTask();
+            console.log('异步选股最终结果:', result);
+        }
+        
         if (result.success) {
-            console.log('选股成功，数据类型:', typeof result.data);
-            console.log('选股结果键:', Object.keys(result.data || {}));
-            // 缓存选股结果，供手动保存和导出使用
-            lastSelectionResults = result.data;
-            lastSelectionTime = result.time;
-            lastSelectionDate = result.selection_date || result.time.split(' ')[0];  // 缓存选股日期
-            
-            // 显示选股日期（使用display元素，避免与弹窗中的input元素冲突）
-            const selectionDateEl = document.getElementById('selection-date-display');
-            if (selectionDateEl) {
-                selectionDateEl.textContent = `选股日期: ${lastSelectionDate}`;
-            }
-            
-            // 显示导出和保存按钮
-            const exportBtn = document.getElementById('export-selection-btn');
-            if (exportBtn) {
-                exportBtn.style.display = '';
-                exportBtn.disabled = false;
-            }
-            const saveBtn = document.getElementById('save-selection-btn');
-            if (saveBtn) {
-                saveBtn.style.display = '';
-                saveBtn.disabled = false;
-                saveBtn.innerHTML = '<span class="icon">💾</span> 保存结果';
-                saveBtn.classList.remove('btn-success');
-            }
-            renderSelectionResults(result.data, result.time, result.filter_stats, result.strategy_display_names);
+            applySelectionResult(result);
         } else {
             console.error('选股失败:', result.error);
             document.getElementById('selection-results').innerHTML = 
@@ -1113,4 +1218,11 @@ function renderDayStrategyBlock(strategyName, signals) {
 
     html += '</div>';
     return html;
+}
+
+// 页面加载后自动恢复未完成的选股任务（如果有），完成后自动显示结果，无需手动刷新
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => resumePendingSelection());
+} else {
+    resumePendingSelection();
 }

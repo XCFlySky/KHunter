@@ -26,6 +26,75 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============ 市场速览等只读GET接口的内存缓存 ============
+# 初次进入"市场速览"页面时多个接口串行查询较慢，这里对首页相关接口做短TTL缓存，
+# 数据更新完成、选股结果保存后会主动失效，同时TTL兜底保证数据新鲜。
+import time as _cache_time
+import threading as _cache_threading
+from functools import wraps as _cache_wraps
+
+_api_response_cache = {}
+_api_response_cache_lock = _cache_threading.Lock()
+_API_CACHE_TTL = 300  # 缓存有效期（秒）
+
+
+def cached_api(cache_key):
+    """GET接口缓存装饰器：缓存200响应的JSON内容，TTL内直接返回缓存"""
+    def decorator(func):
+        @_cache_wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                query = request.query_string.decode('utf-8', 'ignore')
+            except Exception:
+                query = ''
+            key = f"{cache_key}:{query}"
+            now = _cache_time.time()
+            with _api_response_cache_lock:
+                entry = _api_response_cache.get(key)
+            if entry and now - entry['ts'] < _API_CACHE_TTL:
+                return app.response_class(entry['body'], mimetype='application/json')
+            resp = func(*args, **kwargs)
+            try:
+                if getattr(resp, 'status_code', None) == 200:
+                    with _api_response_cache_lock:
+                        _api_response_cache[key] = {'ts': now, 'body': resp.get_data(as_text=True)}
+            except Exception:
+                pass
+            return resp
+        return wrapper
+    return decorator
+
+
+def invalidate_api_cache():
+    """清空接口缓存（数据更新或选股结果保存后调用）"""
+    with _api_response_cache_lock:
+        _api_response_cache.clear()
+
+
+# ============ 选股任务保护 ============
+# 服务器内存较小(1.6G)，选股会加载全市场K线数据，多次并发/重复点击会叠加内存导致OOM假死。
+# 同一时刻只允许一个选股任务运行，重复请求直接拒绝。
+_selection_run_lock = _cache_threading.Lock()
+
+# 选股时每只股票最多加载的K线条数（策略最多需要约70条，250条约等于1年交易日，留足余量且大幅降低内存占用）
+SELECTION_KLINE_LIMIT = 250
+
+
+def single_flight(lock, error_msg):
+    """接口互斥装饰器：已有同类任务运行时直接返回错误，不排队、不叠加"""
+    def decorator(func):
+        @_cache_wraps(func)
+        def wrapper(*args, **kwargs):
+            if not lock.acquire(blocking=False):
+                return jsonify({'success': False, 'error': error_msg})
+            try:
+                return func(*args, **kwargs)
+            finally:
+                lock.release()
+        return wrapper
+    return decorator
+
+
 # 自定义JSON编码器，处理numpy类型和NaN值
 class NumpyEncoder(JSONEncoder):
     """自定义JSON编码器，处理numpy类型和NaN值"""
@@ -133,6 +202,14 @@ socketio = SocketIO(
     ping_interval=60,   # 60秒 ping 间隔
     max_http_buffer_size=int(1e8)  # 100MB 缓冲区
 )
+
+# 静态资源/页面禁用缓存：手机/微信浏览器缓存激进，禁用后前端更新立即生效
+@app.after_request
+def _disable_static_cache(response):
+    if request.path.startswith('/static/') or response.content_type.startswith('text/html'):
+        response.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    return response
+
 
 # ==================== 日志配置 ====================
 # 使用新的日志配置模块
@@ -329,6 +406,7 @@ def get_latest_trading_date() -> str:
 
 
 @app.route('/api/dashboard/my-golden-stocks')
+@cached_api('dashboard_my_golden_stocks')
 def get_my_golden_stocks():
     """获取我的金股 - 最近交易日的top5股票（考虑收盘时间）"""
     try:
@@ -374,6 +452,7 @@ def get_my_golden_stocks():
 
 
 @app.route('/api/dashboard/hot-industries')
+@cached_api('dashboard_hot_industries')
 def get_hot_industries():
     """获取最热行业 - top50股票的行业分布（考虑收盘时间）"""
     try:
@@ -430,6 +509,7 @@ def get_hot_industries():
 
 
 @app.route('/api/dashboard/hot-areas')
+@cached_api('dashboard_hot_areas')
 def get_hot_areas():
     """获取最热板块 - top50股票的板块分布（考虑收盘时间）"""
     try:
@@ -820,8 +900,123 @@ def analyze_intersection(results):
         }
 
 
+# ============ 异步选股任务 ============
+# /api/select 全量选股耗时可达数分钟，手机网络下长时间的同步请求会被运营商掐断(Load failed)。
+# 异步模式：POST 携带 async=true（或 ?async=1）时立即返回 task_id，
+# 后台线程执行选股，前端轮询 /api/select/result/<task_id> 获取结果。
+_selection_tasks = {}
+_selection_tasks_lock = _cache_threading.Lock()
+_SELECTION_TASK_TTL = 6 * 3600  # 任务结果保留6小时
+_SELECTION_TASK_MAX = 20        # 最多保留20个任务
+
+
+def _prune_selection_tasks():
+    """清理过期/过多的选股任务（调用方需持有 _selection_tasks_lock）"""
+    now = _cache_time.time()
+    expired = [tid for tid, t in _selection_tasks.items()
+               if now - t.get('started', now) > _SELECTION_TASK_TTL]
+    for tid in expired:
+        _selection_tasks.pop(tid, None)
+    if len(_selection_tasks) > _SELECTION_TASK_MAX:
+        for tid, _ in sorted(_selection_tasks.items(),
+                             key=lambda kv: kv[1].get('started', 0))[:len(_selection_tasks) - _SELECTION_TASK_MAX]:
+            _selection_tasks.pop(tid, None)
+
+
+def _run_selection_task(task_id, method, json_data, query_args):
+    """后台线程：在测试请求上下文中执行同步选股逻辑，结果写入任务表"""
+    task_logger = logging.getLogger(__name__)
+    try:
+        with app.test_request_context('/api/select', method=method, json=json_data, query_string=query_args):
+            resp = _run_selection_impl()
+        try:
+            result = json.loads(resp.get_data(as_text=True))
+        except Exception:
+            result = {'success': False, 'error': '选股结果解析失败'}
+        success = bool(result.get('success'))
+        with _selection_tasks_lock:
+            if task_id in _selection_tasks:
+                _selection_tasks[task_id].update(
+                    status='done' if success else 'error',
+                    result=result,
+                    error=None if success else result.get('error', '选股执行失败'))
+        try:
+            socketio.emit('selection_done', {'task_id': task_id, 'success': success, 'error': result.get('error')})
+        except Exception:
+            pass
+        task_logger.info(f"异步选股任务完成: {task_id}, success={success}")
+    except Exception as e:
+        task_logger.error(f"异步选股任务异常: {task_id}: {e}", exc_info=True)
+        with _selection_tasks_lock:
+            if task_id in _selection_tasks:
+                _selection_tasks[task_id].update(status='error', error=str(e))
+        try:
+            socketio.emit('selection_done', {'task_id': task_id, 'success': False, 'error': str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            _selection_run_lock.release()
+        except Exception:
+            pass
+
+
+@app.route('/api/select/result/<task_id>', methods=['GET'])
+def get_selection_task_result(task_id):
+    """查询异步选股任务状态/结果"""
+    with _selection_tasks_lock:
+        task = _selection_tasks.get(task_id)
+        snapshot = dict(task) if task else None
+    if not snapshot:
+        return jsonify({'success': False, 'error': '任务不存在或已过期'}), 404
+    if snapshot.get('status') == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    return jsonify({
+        'success': True,
+        'status': snapshot.get('status'),
+        'result': snapshot.get('result'),
+        'error': snapshot.get('error')
+    })
+
+
 @app.route('/api/select', methods=['GET', 'POST'])
 def run_selection():
+    """执行选股入口：支持同步（默认）和异步（async=1 或 POST 携带 async=true）两种模式"""
+    use_async = request.args.get('async') == '1'
+    if not use_async and request.method == 'POST':
+        payload = request.get_json(silent=True) or {}
+        use_async = bool(payload.get('async'))
+    if use_async:
+        # 异步模式：立即返回 task_id，后台线程执行选股
+        if not _selection_run_lock.acquire(blocking=False):
+            return jsonify({'success': False, 'error': '已有选股任务正在执行，请等待其完成后再试'})
+        import uuid
+        task_id = uuid.uuid4().hex
+        method = request.method
+        json_data = request.get_json(silent=True) if request.method == 'POST' else None
+        if json_data:
+            json_data.pop('async', None)  # 移除控制参数，避免影响选股逻辑
+        query_args = request.args.to_dict()
+        query_args.pop('async', None)
+        with _selection_tasks_lock:
+            _selection_tasks[task_id] = {
+                'status': 'running', 'result': None, 'error': None,
+                'started': _cache_time.time()
+            }
+            _prune_selection_tasks()
+        socketio.start_background_task(_run_selection_task, task_id, method, json_data, query_args)
+        logger.info(f"异步选股任务已启动: {task_id}")
+        return jsonify({'success': True, 'async': True, 'task_id': task_id})
+    # 同步模式（兼容旧调用）：加互斥锁直接执行
+    if not _selection_run_lock.acquire(blocking=False):
+        return jsonify({'success': False, 'error': '已有选股任务正在执行，请等待其完成后再试'})
+    try:
+        return _run_selection_impl()
+    finally:
+        _selection_run_lock.release()
+
+
+def _run_selection_impl():
     """执行选股 - 支持GET（执行所有策略）和POST（执行指定策略）。POST请求支持OR/AND逻辑：OR（并集）任意策略选中即可；AND（交集）所有策略都选中"""
     import traceback
     
@@ -906,8 +1101,8 @@ def run_selection():
             # 加载所有股票的完整数据
             for idx, code in enumerate(stock_codes):
                 try:
-                    # 读取完整数据，如果指定了结束日期，则只读取到该日期的数据
-                    full_df = db_manager.read_stock(code, end_date=end_date)
+                    # 读取数据：限制最大条数，避免全量历史数据一次性载入导致内存暴涨(OOM)
+                    full_df = db_manager.read_stock(code, end_date=end_date, limit=SELECTION_KLINE_LIMIT)
                     if not full_df.empty and len(full_df) >= 30:
                         # 按日期降序排序（最新的在前）
                         full_df = full_df.sort_values('date', ascending=False)
@@ -1440,14 +1635,11 @@ def run_selection_date_range(start_date, end_date, strategies_to_run, include_di
 
         # 预处理：日期列统一转换为 Timestamp，便于按日截断
         func_logger.info("预处理股票数据（日期格式统一）...")
-        normalized_data = {}
-        for code, (name, df) in stock_data.items():
+        for code in list(stock_data.keys()):
             try:
-                df = df.copy()
-                df['date'] = pd.to_datetime(df['date'])
-                normalized_data[code] = (name, df)
+                stock_data[code][1]['date'] = pd.to_datetime(stock_data[code][1]['date'])
             except Exception:
-                continue
+                del stock_data[code]
 
         by_date = {}          # day -> {display_name: signals, '_diagnostics': {...}}
         merged = {}           # strategy_name -> {code: signal_entry}（并集）
@@ -1457,33 +1649,36 @@ def run_selection_date_range(start_date, end_date, strategies_to_run, include_di
             day_ts = pd.Timestamp(day)
             day_start = dt.now()
 
-            # 按当日截断每只股票的数据（仅保留 <= day 的数据）
-            day_stock_data = {}
-            for code, (name, df) in normalized_data.items():
-                day_df = df[df['date'] <= day_ts]
-                if len(day_df) >= 30:
-                    day_stock_data[code] = (name, day_df)
-
             day_result = {}
             day_diag = {}
+            analyzed_count = 0  # 当日满足最小数据量、实际参与分析的股票数
 
-            for strategy_name, strategy in strategies_to_execute:
-                display_name = strategy_display_names.get(strategy_name, strategy_name)
-                signals = []
-                rejected = [] if include_diagnostics else None
+            # 各策略当日结果容器
+            signals_map = {sname: [] for sname, _ in strategies_to_execute}
+            rejected_map = {sname: ([] if include_diagnostics else None) for sname, _ in strategies_to_execute}
 
-                for code, (name, df) in day_stock_data.items():
+            # 逐只股票截断当日数据并执行各策略（不缓存全市场截断副本，避免内存峰值）
+            for code, (name, df) in stock_data.items():
+                day_df = df[df['date'] <= day_ts]
+                if len(day_df) < 30:
+                    continue
+                analyzed_count += 1
+                for strategy_name, strategy in strategies_to_execute:
+                    display_name = strategy_display_names.get(strategy_name, strategy_name)
+                    signals = signals_map[strategy_name]
+                    rejected = rejected_map[strategy_name]
                     try:
-                        result = strategy.analyze_stock(code, name, df)
+                        result = strategy.analyze_stock(code, name, day_df)
                         if result:
-                            signals.append({
+                            signal_entry = {
                                 'code': result['code'],
                                 'name': result.get('name', stock_names.get(code, '未知')),
                                 'signals': result['signals'],
                                 'strategy_display_name': display_name
-                            })
+                            }
+                            signals.append(signal_entry)
                             # 并集合并（后处理的日期覆盖先处理的，最终保留最新日期）
-                            merged.setdefault(strategy_name, {})[code] = signals[-1]
+                            merged.setdefault(strategy_name, {})[code] = signal_entry
                             merged_dates.setdefault((strategy_name, code), []).append(day)
                         elif rejected is not None:
                             rejected.append({
@@ -1494,6 +1689,10 @@ def run_selection_date_range(start_date, end_date, strategies_to_run, include_di
                     except Exception:
                         pass
 
+            for strategy_name, strategy in strategies_to_execute:
+                display_name = strategy_display_names.get(strategy_name, strategy_name)
+                signals = signals_map[strategy_name]
+                rejected = rejected_map[strategy_name]
                 day_result[display_name] = signals
 
                 if include_diagnostics and rejected is not None:
@@ -1504,7 +1703,7 @@ def run_selection_date_range(start_date, end_date, strategies_to_run, include_di
                         category = re.sub(r'(?<![A-Za-z0-9])\d+\.?\d*', 'N', category)
                         reason_stats[category] = reason_stats.get(category, 0) + 1
                     day_diag[display_name] = {
-                        'total_analyzed': len(day_stock_data),
+                        'total_analyzed': analyzed_count,
                         'selected': len(signals),
                         'rejected_count': len(rejected),
                         'reason_stats': reason_stats,
@@ -1639,6 +1838,7 @@ def save_selection():
             end_date=end_date
         )
         func_logger.info(f"手动保存选股结果 - {save_result}")
+        invalidate_api_cache()  # 选股结果保存后，金股/行业/板块数据已变化
         return jsonify(save_result)
 
     except Exception as e:
@@ -1945,6 +2145,7 @@ def save_strategy_params(name):
 
 
 @app.route('/api/stats')
+@cached_api('stats')
 def get_stats():
     """获取系统统计信息"""
     try:
@@ -2122,6 +2323,7 @@ def trigger_update():
             emit_update_progress()
         finally:
             update_status['running'] = False
+            invalidate_api_cache()  # 数据更新后首页统计已变化，清空接口缓存
             emit_update_progress()
     
     # 启动后台线程
@@ -3291,6 +3493,7 @@ def query_market_temperature():
 
 
 @app.route('/api/market-temperature/latest', methods=['GET'])
+@cached_api('market_temperature_latest')
 def get_latest_market_temperature():
     """
     获取最新的市场温度数据
@@ -4473,6 +4676,7 @@ def run_web_server(host='0.0.0.0', port=5000, debug=False):
 # ==================== 风控模块API ====================
 
 @app.route('/api/risk/status')
+@cached_api('risk_status')
 def get_risk_status():
     """
     获取当日风控状态
