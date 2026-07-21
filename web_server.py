@@ -33,13 +33,44 @@ import time as _cache_time
 import threading as _cache_threading
 from functools import wraps as _cache_wraps
 
-_api_response_cache = {}
-_api_response_cache_lock = _cache_threading.Lock()
-_API_CACHE_TTL = 300  # 缓存有效期（秒）
+from utils.redis_cache import api_cache as _redis_api_cache
+
+# 各查询接口的缓存TTL（秒），未列出的接口使用默认值
+# 规则：首页速览类10分钟；温度/趋势类30分钟；状态类5分钟；列表类5分钟；策略类1小时；数据状态类2分钟
+_API_CACHE_TTLS = {
+    # 首页「市场速览」卡片
+    'stats': 600,
+    'dashboard_my_golden_stocks': 600,
+    'dashboard_hot_industries': 600,
+    'dashboard_hot_areas': 600,
+    'dashboard_industry_stocks': 600,
+    'dashboard_area_stocks': 600,
+    'market_temperature_latest': 600,
+    'risk_status': 300,
+    # 市场温度趋势/历史
+    'market_temperature_trend': 1800,
+    'market_temperature_query': 1800,
+    'market_temperature_position_ratio': 1800,
+    # 列表/历史
+    'stocks': 300,
+    'selection_history': 300,
+    'risk_history': 600,
+    # 策略元数据（变化极少）
+    'strategies': 3600,
+    'strategies_names': 3600,
+    # 数据状态
+    'data_status': 120,
+    # 狩猎场排名
+    'ranking_dates': 600,
+    'ranking_track': 600,
+}
+_API_CACHE_TTL = 300  # 默认缓存有效期（秒）
 
 
 def cached_api(cache_key):
-    """GET接口缓存装饰器：缓存200响应的JSON内容，TTL内直接返回缓存"""
+    """GET接口缓存装饰器：缓存200响应的JSON内容（Redis优先，进程内降级），TTL内直接返回缓存"""
+    ttl = _API_CACHE_TTLS.get(cache_key, _API_CACHE_TTL)
+
     def decorator(func):
         @_cache_wraps(func)
         def wrapper(*args, **kwargs):
@@ -48,16 +79,16 @@ def cached_api(cache_key):
             except Exception:
                 query = ''
             key = f"{cache_key}:{query}"
-            now = _cache_time.time()
-            with _api_response_cache_lock:
-                entry = _api_response_cache.get(key)
-            if entry and now - entry['ts'] < _API_CACHE_TTL:
-                return app.response_class(entry['body'], mimetype='application/json')
+            cached_body = _redis_api_cache.get(key)
+            if cached_body is not None:
+                resp = app.response_class(cached_body, mimetype='application/json')
+                resp.headers['X-Cache'] = 'HIT'
+                return resp
             resp = func(*args, **kwargs)
             try:
                 if getattr(resp, 'status_code', None) == 200:
-                    with _api_response_cache_lock:
-                        _api_response_cache[key] = {'ts': now, 'body': resp.get_data(as_text=True)}
+                    _redis_api_cache.set(key, resp.get_data(as_text=True), ttl)
+                    resp.headers['X-Cache'] = 'MISS'
             except Exception:
                 pass
             return resp
@@ -66,9 +97,8 @@ def cached_api(cache_key):
 
 
 def invalidate_api_cache():
-    """清空接口缓存（数据更新或选股结果保存后调用）"""
-    with _api_response_cache_lock:
-        _api_response_cache.clear()
+    """清空接口缓存（数据更新、选股结果保存、温度重算、风控配置变更后调用）"""
+    _redis_api_cache.clear()
 
 
 # ============ 选股任务保护 ============
@@ -308,6 +338,7 @@ def index():
 
 
 @app.route('/api/stocks')
+@cached_api('stocks')
 def get_stocks():
     """获取股票列表 - 从 stock_basic 表获取基础数据"""
     try:
@@ -566,6 +597,7 @@ def get_hot_areas():
 
 
 @app.route('/api/dashboard/industry-stocks')
+@cached_api('dashboard_industry_stocks')
 def get_industry_stocks():
     """获取指定行业的股票列表 - top50"""
     try:
@@ -651,6 +683,7 @@ def get_industry_stocks():
 
 
 @app.route('/api/dashboard/area-stocks')
+@cached_api('dashboard_area_stocks')
 def get_area_stocks():
     """获取指定板块的股票列表 - top50"""
     try:
@@ -1897,6 +1930,7 @@ def get_strategy_detail(name):
 
 
 @app.route('/api/strategies/names', methods=['GET'])
+@cached_api('strategies_names')
 def get_strategy_names():
     """
     获取策略名称映射（英文类名 -> 中文名称）
@@ -1918,6 +1952,7 @@ def get_strategy_names():
 
 
 @app.route('/api/strategies')
+@cached_api('strategies')
 def get_strategies():
     """获取策略列表 - 包含中文名称和元数据，按照strategy_order.yaml中定义的顺序排列"""
     try:
@@ -2170,6 +2205,15 @@ def get_stats():
         return jsonify({'success': False, 'error': str(e)})
 
 
+@app.route('/api/cache/status', methods=['GET'])
+def get_cache_status():
+    """缓存健康检查：返回当前缓存后端（redis/memory）与缓存键数量"""
+    try:
+        return jsonify({'success': True, 'data': _redis_api_cache.stats()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """获取配置"""
@@ -2350,6 +2394,7 @@ def get_update_status():
 
 
 @app.route('/api/selection-history', methods=['GET'])
+@cached_api('selection_history')
 def get_selection_history():
     """
     查询选股历史
@@ -2877,6 +2922,7 @@ def check_data_completeness():
 
 
 @app.route('/api/data/status')
+@cached_api('data_status')
 def get_data_status():
     """
     获取数据状态摘要
@@ -3255,6 +3301,7 @@ def get_tables_stats():
 # ==================== 排名相关API ====================
 
 @app.route('/api/ranking/dates')
+@cached_api('ranking_dates')
 def get_ranking_dates():
     """
     获取可用的选股日期
@@ -3301,6 +3348,7 @@ def generate_ranking():
         # 清理数据，确保可以正确序列化为JSON
         cleaned_results = clean_data_for_json(results)
         
+        invalidate_api_cache()  # 排名生成后，排名/金股等缓存失效
         return jsonify({
             'success': True,
             'data': cleaned_results
@@ -3314,6 +3362,7 @@ def generate_ranking():
 
 
 @app.route('/api/ranking/track', methods=['GET'])
+@cached_api('ranking_track')
 def track_ranking():
     """
     跟踪排名
@@ -3377,6 +3426,7 @@ def regenerate_ranking():
         # 调用排名管理器的重新生成方法
         result = ranking_manager.regenerate_ranking(selection_date, force_recalculate)
         
+        invalidate_api_cache()  # 排名重算后，排名/金股等缓存失效
         return jsonify({
             'success': result.get('success', False),
             'message': result.get('message', ''),
@@ -3429,6 +3479,7 @@ def calculate_market_temperature():
         mt = MarketTemperature()
         result = mt.calculate(trade_date, use_cache=use_cache)
         
+        invalidate_api_cache()  # 温度重算后，首页温度/趋势等缓存失效
         return jsonify({
             'success': True,
             'data': clean_data_for_json(result)
@@ -3451,6 +3502,7 @@ def calculate_market_temperature():
 
 
 @app.route('/api/market-temperature/query', methods=['GET'])
+@cached_api('market_temperature_query')
 def query_market_temperature():
     """
     查询市场温度数据
@@ -3525,6 +3577,7 @@ def get_latest_market_temperature():
 
 
 @app.route('/api/market-temperature/trend', methods=['GET'])
+@cached_api('market_temperature_trend')
 def get_market_temperature_trend():
     """
     获取市场温度趋势
@@ -3562,6 +3615,7 @@ def get_market_temperature_trend():
 
 
 @app.route('/api/market-temperature/position-ratio', methods=['GET'])
+@cached_api('market_temperature_position_ratio')
 def get_market_temperature_position_ratio():
     """
     获取指定日期的仓位系数
@@ -4736,6 +4790,7 @@ def get_risk_status():
 
 
 @app.route('/api/risk/history')
+@cached_api('risk_history')
 def get_risk_history():
     """
     获取历史风控状态
@@ -4861,6 +4916,7 @@ def update_risk_config():
         success = controller.update_risk_config(new_config)
         
         if success:
+            invalidate_api_cache()  # 风控配置变更后，风险状态等缓存失效
             return jsonify({
                 'success': True,
                 'message': '配置更新成功'

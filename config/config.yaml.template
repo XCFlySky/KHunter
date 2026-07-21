@@ -24,3 +24,13 @@ schedule:
 update:
   lookback_days: 10
   skip_failed: true
+
+# Redis 缓存配置（查询接口响应缓存）
+# Redis 不可用时自动降级为进程内缓存，服务可正常启动
+redis:
+  enabled: true
+  host: "127.0.0.1"
+  port: 6379
+  db: 0
+  password: ""
+  key_prefix: "khunter"
