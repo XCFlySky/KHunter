@@ -404,7 +404,12 @@ class DataInitializer:
             stock_codes: 股票代码列表
         """
         logger.info("初始化板块数据...")
-        # TODO: 实现板块数据初始化逻辑
+        try:
+            # 刷新申万行业板块映射（每周一次，表为空时强制；解决同花顺接口无权限导致的板块缺失）
+            from trading.sw_sector_loader import refresh_sw_sector_mapping
+            refresh_sw_sector_mapping(self.db_manager)
+        except Exception as e:
+            logger.warning(f"刷新申万板块映射失败: {e}")
         logger.info("板块数据初始化完成")
     
     # ==================== 资金流向数据初始化 ====================

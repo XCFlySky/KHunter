@@ -305,6 +305,12 @@ class SectorScorer:
         # 转换为 Tushare 格式代码
         ts_code = self._convert_ts_code(stock_code)
 
+        # 优先从本地板块映射表获取（申万行业，定期刷新，无 Tushare 权限依赖）
+        db_sectors = self._get_stock_sectors_from_db(stock_code)
+        if db_sectors:
+            self._cache.set(cache_key, db_sectors)
+            return db_sectors
+
         try:
             pro = self._get_pro()
             # 使用 con_code 参数查询个股所属板块
@@ -351,6 +357,29 @@ class SectorScorer:
             return sectors
         except Exception as e:
             logger.error(f"获取个股板块映射失败: {stock_code}, {e}")
+            return []
+
+    def _get_stock_sectors_from_db(self, stock_code: str) -> List[dict]:
+        """
+        从本地板块映射表获取个股所属板块（申万行业，无需 Tushare 权限）
+
+        参数:
+            stock_code: 股票代码（6位数字）
+        返回:
+            List[dict]: 板块列表，每个元素包含 ts_code 和 name；无映射时返回空列表
+        """
+        try:
+            from utils.global_db import get_global_db
+            db = get_global_db()
+            rows = db.query("""
+                SELECT m.sector_code AS ts_code, s.sector_name AS name
+                FROM stock_sector_mapping m
+                JOIN stock_sector s ON s.sector_code = m.sector_code
+                WHERE m.stock_code = ?
+            """, (stock_code,))
+            return [{'ts_code': r['ts_code'], 'name': r['name']} for r in rows if r['name']]
+        except Exception as e:
+            logger.debug(f"本地板块映射查询失败 {stock_code}: {e}")
             return []
 
     def _get_sector_name_map(self) -> dict:

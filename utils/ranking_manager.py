@@ -315,11 +315,32 @@ class RankingManager:
             else:
                 logger.debug(f"没有找到板块详情记录")
             
+            # 兑底：从本地板块映射表（申万行业）解析板块名称
+            fallback = self._get_sector_from_mapping(stock_code)
+            if fallback:
+                return fallback
+            
             logger.debug(f"无法获取股票 {stock_code} 的板块信息")
             return ''
         except Exception as e:
             logger.warning(f"获取股票 {stock_code} 板块信息失败: {str(e)}")
             return ''
+    
+    def _get_sector_from_mapping(self, stock_code: str) -> str:
+        """从本地板块映射表（申万行业）获取板块名称，作为板块详情缺失时的兑底"""
+        try:
+            rows = self.db_manager.query("""
+                SELECT s.sector_name AS name
+                FROM stock_sector_mapping m
+                JOIN stock_sector s ON s.sector_code = m.sector_code
+                WHERE m.stock_code = ?
+                LIMIT 1
+            """, (stock_code,))
+            if rows and rows[0]['name']:
+                return rows[0]['name']
+        except Exception as e:
+            logger.debug(f"板块映射兑底查询失败 {stock_code}: {e}")
+        return ''
     
     def track_ranking(self, selection_date: str, top_n: int = 5) -> List[Dict]:
         """跟踪指定日期的排名
