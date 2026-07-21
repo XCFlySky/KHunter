@@ -63,6 +63,8 @@ _API_CACHE_TTLS = {
     # 狩猎场排名
     'ranking_dates': 600,
     'ranking_track': 600,
+    # 交易日历（变化极少）
+    'is_trading_day': 3600,
 }
 _API_CACHE_TTL = 300  # 默认缓存有效期（秒）
 
@@ -1024,6 +1026,19 @@ def get_selection_task_result(task_id):
 @app.route('/api/select', methods=['GET', 'POST'])
 def run_selection():
     """执行选股入口：支持同步（默认）和异步（async=1 或 POST 携带 async=true）两种模式"""
+    # 非交易日兑底校验：单日选股且目标日期非交易日时直接拒绝（前端已在确认时校验，此为后端兑底）
+    try:
+        if request.method == 'POST':
+            _p = request.get_json(silent=True) or {}
+            _check_date = _p.get('end_date') or dt.now().strftime('%Y-%m-%d')
+            _has_start = bool(_p.get('start_date'))
+        else:
+            _check_date = request.args.get('end_date') or dt.now().strftime('%Y-%m-%d')
+            _has_start = bool(request.args.get('start_date'))
+        if not _has_start and not is_trading_day(_check_date):
+            return jsonify({'success': False, 'error': f'{_check_date} 是非交易日（周末或节假日），A股不开盘，不能选股'})
+    except Exception:
+        pass  # 校验异常不阻塞主流程
     use_async = request.args.get('async') == '1'
     if not use_async and request.method == 'POST':
         payload = request.get_json(silent=True) or {}
@@ -2185,6 +2200,20 @@ def save_strategy_params(name):
         func_logger = logging.getLogger(__name__)
         func_logger.error(f"保存策略参数失败: {str(e)}")
         func_logger.error(f"错误堆栈: {traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/api/is-trading-day', methods=['GET'])
+@cached_api('is_trading_day')
+def api_is_trading_day():
+    """查询指定日期是否为A股交易日（含节假日判断），供前端选股前校验"""
+    try:
+        date_str = request.args.get('date', '').strip() or dt.now().strftime('%Y-%m-%d')
+        return jsonify({
+            'success': True,
+            'data': {'date': date_str, 'is_trading_day': is_trading_day(date_str)}
+        })
+    except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
 

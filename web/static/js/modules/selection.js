@@ -56,12 +56,6 @@ export function showStrategySelectionModal(strategies) {
         selectionDateInput.value = today;
     }
     
-    // 开始日期默认留空（单日模式）
-    const startDateInput = document.querySelector('#strategy-selection-modal #selection-start-date');
-    if (startDateInput) {
-        startDateInput.value = '';
-    }
-    
     modal.classList.add('active');
 }
 
@@ -107,19 +101,21 @@ export async function confirmStrategySelection() {
     const diagCheckbox = document.querySelector('#strategy-selection-modal #include-diagnostics');
     const includeDiagnostics = diagCheckbox ? diagCheckbox.checked : false;
     
-    // 开始日期（可选，提供则为日期范围选股）
-    const startDateInput = document.querySelector('#strategy-selection-modal #selection-start-date');
-    let startDate = null;
-    if (startDateInput && startDateInput.value) {
-        startDate = startDateInput.value;
-        if (selectionDate && startDate >= selectionDate) {
-            alert('开始日期必须早于选股日期（不需要范围选股时请留空开始日期）');
+    // 校验是否为A股交易日：周末/节假日不开盘，不能选股
+    const checkDate = selectionDate || new Date().toISOString().split('T')[0];
+    try {
+        const resp = await fetch(`/api/is-trading-day?date=${checkDate}`);
+        const r = await resp.json();
+        if (r.success && r.data && r.data.is_trading_day === false) {
+            alert(`${checkDate} 是非交易日（周末或节假日），A股不开盘，不能选股`);
             return;
         }
+    } catch (e) {
+        console.warn('交易日校验失败，继续执行:', e.message);
     }
     
     closeStrategyModal();
-    executeSelectionWithStrategies(strategies, logic, selectionDate, includeDiagnostics, startDate);
+    executeSelectionWithStrategies(strategies, logic, selectionDate, includeDiagnostics);
 }
 
 /**
@@ -271,9 +267,8 @@ async function pollSelectionResult(taskId) {
  * @param {string} logic - 逻辑（OR/AND）
  * @param {string} selectionDate - 选股日期，格式为YYYY-MM-DD，null表示使用最新数据
  * @param {boolean} includeDiagnostics - 是否返回未选中股票及原因
- * @param {string} startDate - 开始日期（可选，提供则为日期范围选股）
  */
-export async function executeSelectionWithStrategies(strategies, logic = 'or', selectionDate = null, includeDiagnostics = false, startDate = null) {
+export async function executeSelectionWithStrategies(strategies, logic = 'or', selectionDate = null, includeDiagnostics = false) {
     // 缓存选股日期，供手动保存使用
     lastSelectionDate = selectionDate;
     
@@ -296,9 +291,6 @@ export async function executeSelectionWithStrategies(strategies, logic = 'or', s
         const timeoutId = setTimeout(() => controller.abort(), 10800000);
         
         const requestBody = { strategies: strategies, logic: logic, end_date: selectionDate, include_diagnostics: includeDiagnostics, async: true };
-        if (startDate) {
-            requestBody.start_date = startDate;
-        }
         console.log('发送请求体:', JSON.stringify(requestBody));
         
         const response = await fetch('/api/select', {
