@@ -2,18 +2,50 @@
  * 股票相关功能模块
  */
 
+// ============ 市场速览本地缓存（stale-while-revalidate）============
+// 首次进入页面时先渲染上次缓存的数据，再后台请求最新数据刷新，提升首屏速度
+const DASHBOARD_CACHE_PREFIX = 'kh_dashboard_';
+
+function readDashboardCache(key) {
+    try {
+        const raw = localStorage.getItem(DASHBOARD_CACHE_PREFIX + key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeDashboardCache(key, data) {
+    try {
+        localStorage.setItem(DASHBOARD_CACHE_PREFIX + key, JSON.stringify(data));
+    } catch (e) {
+        // localStorage 不可用时静默失败
+    }
+}
+
 /**
  * 加载统计信息
  */
 export async function loadStats() {
+    const render = (data) => {
+        document.getElementById('stat-stocks').textContent = data.total_stocks;
+        document.getElementById('stat-date').textContent = data.latest_date;
+        document.getElementById('stat-strategies').textContent = data.strategies;
+    };
+
+    // 先用本地缓存渲染
+    const cached = readDashboardCache('stats');
+    if (cached && cached.success && cached.data) {
+        render(cached.data);
+    }
+
     try {
         const response = await fetch('/api/stats');
         const result = await response.json();
-        
+
         if (result.success) {
-            document.getElementById('stat-stocks').textContent = result.data.total_stocks;
-            document.getElementById('stat-date').textContent = result.data.latest_date;
-            document.getElementById('stat-strategies').textContent = result.data.strategies;
+            render(result.data);
+            writeDashboardCache('stats', result);
         }
     } catch (error) {
         console.error('加载统计信息失败:', error);
@@ -25,25 +57,15 @@ export async function loadStats() {
  */
 export async function loadMyGoldenStocks() {
     const container = document.getElementById('my-golden-stocks-content');
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
-        
-        const response = await fetch('/api/dashboard/my-golden-stocks', { signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const result = await response.json();
-        
+    let renderedFromCache = false;
+
+    const render = (result) => {
         // 检查result是否为空或没有success字段
         if (!result || (result.success === false)) {
             container.innerHTML = '<p class="text-muted">暂无金股数据</p>';
             return;
         }
-        
+
         // 如果success为true或result中有stocks数据
         if (result.stocks && result.stocks.length > 0) {
             let html = `
@@ -86,11 +108,35 @@ export async function loadMyGoldenStocks() {
         } else {
             container.innerHTML = '<p class="text-muted">暂无金股数据</p>';
         }
+    };
+
+    // 先用本地缓存渲染
+    const cached = readDashboardCache('my_golden_stocks');
+    if (cached) {
+        render(cached);
+        renderedFromCache = true;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+
+        const response = await fetch('/api/dashboard/my-golden-stocks', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+        render(result);
+        if (result && result.success !== false) {
+            writeDashboardCache('my_golden_stocks', result);
+        }
     } catch (error) {
         console.error('加载我的金股失败:', error);
-        if (error.name === 'AbortError') {
-            container.innerHTML = '<p class="text-muted">暂无金股数据</p>';
-        } else {
+        // 已用缓存渲染过则保留缓存内容，避免闪烁
+        if (!renderedFromCache) {
             container.innerHTML = '<p class="text-muted">暂无金股数据</p>';
         }
     }
@@ -101,25 +147,15 @@ export async function loadMyGoldenStocks() {
  */
 export async function loadHotIndustries() {
     const container = document.getElementById('hot-industries-content');
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
-        
-        const response = await fetch('/api/dashboard/hot-industries', { signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const result = await response.json();
-        
+    let renderedFromCache = false;
+
+    const render = (result) => {
         // 检查result是否为空或没有success字段
         if (!result || (result.success === false)) {
             container.innerHTML = '<p class="text-muted">暂无行业数据</p>';
             return;
         }
-        
+
         // 如果success为true或result中有industries数据
         if (result.industries && result.industries.length > 0) {
             let html = `
@@ -160,11 +196,35 @@ export async function loadHotIndustries() {
         } else {
             container.innerHTML = '<p class="text-muted">暂无行业数据</p>';
         }
+    };
+
+    // 先用本地缓存渲染
+    const cached = readDashboardCache('hot_industries');
+    if (cached) {
+        render(cached);
+        renderedFromCache = true;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+
+        const response = await fetch('/api/dashboard/hot-industries', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+        render(result);
+        if (result && result.success !== false) {
+            writeDashboardCache('hot_industries', result);
+        }
     } catch (error) {
         console.error('加载最热行业失败:', error);
-        if (error.name === 'AbortError') {
-            container.innerHTML = '<p class="text-muted">暂无行业数据</p>';
-        } else {
+        // 已用缓存渲染过则保留缓存内容，避免闪烁
+        if (!renderedFromCache) {
             container.innerHTML = '<p class="text-muted">暂无行业数据</p>';
         }
     }
@@ -175,25 +235,15 @@ export async function loadHotIndustries() {
  */
 export async function loadHotAreas() {
     const container = document.getElementById('hot-areas-content');
-    try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
-        
-        const response = await fetch('/api/dashboard/hot-areas', { signal: controller.signal });
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const result = await response.json();
-        
+    let renderedFromCache = false;
+
+    const render = (result) => {
         // 检查result是否为空或没有success字段
         if (!result || (result.success === false)) {
             container.innerHTML = '<p class="text-muted">暂无板块数据</p>';
             return;
         }
-        
+
         // 如果success为true或result中有areas数据
         if (result.areas && result.areas.length > 0) {
             let html = `
@@ -234,11 +284,35 @@ export async function loadHotAreas() {
         } else {
             container.innerHTML = '<p class="text-muted">暂无板块数据</p>';
         }
+    };
+
+    // 先用本地缓存渲染
+    const cached = readDashboardCache('hot_areas');
+    if (cached) {
+        render(cached);
+        renderedFromCache = true;
+    }
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5秒超时
+
+        const response = await fetch('/api/dashboard/hot-areas', { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const result = await response.json();
+        render(result);
+        if (result && result.success !== false) {
+            writeDashboardCache('hot_areas', result);
+        }
     } catch (error) {
         console.error('加载最热板块失败:', error);
-        if (error.name === 'AbortError') {
-            container.innerHTML = '<p class="text-muted">暂无板块数据</p>';
-        } else {
+        // 已用缓存渲染过则保留缓存内容，避免闪烁
+        if (!renderedFromCache) {
             container.innerHTML = '<p class="text-muted">暂无板块数据</p>';
         }
     }

@@ -114,12 +114,15 @@ def run_selection(end_date: str) -> list:
         pass
 
     # 加载股票数据（与 Web 端相同的过滤条件）
+    # 限制每只股票加载的K线条数，避免全量历史数据一次性载入导致内存暴涨(OOM)
+    # 策略最多需要约70条，250条≈1年交易日，与 web_server 的 SELECTION_KLINE_LIMIT 保持一致
+    KLINE_LIMIT = 250
     stock_codes = db.list_all_stocks()
     stock_names = db.get_all_stock_names()
     stock_data = {}
     for code in stock_codes:
         try:
-            df = db.read_stock(code, end_date=end_date)
+            df = db.read_stock(code, end_date=end_date, limit=KLINE_LIMIT)
             if not df.empty and len(df) >= 30:
                 df = df.sort_values('date', ascending=False)
                 stock_data[code] = (stock_names.get(code, '未知'), df)

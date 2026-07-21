@@ -6,6 +6,27 @@
 let riskChart = null;
 let temperatureChart = null;
 
+// ============ 市场速览本地缓存（stale-while-revalidate）============
+// 首次进入页面时先渲染上次缓存的数据，再后台请求最新数据刷新，提升首屏速度
+const DASHBOARD_CACHE_PREFIX = 'kh_dashboard_';
+
+function readDashboardCache(key) {
+    try {
+        const raw = localStorage.getItem(DASHBOARD_CACHE_PREFIX + key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeDashboardCache(key, data) {
+    try {
+        localStorage.setItem(DASHBOARD_CACHE_PREFIX + key, JSON.stringify(data));
+    } catch (e) {
+        // localStorage 不可用时静默失败
+    }
+}
+
 /**
  * 初始化统计数据
  */
@@ -23,19 +44,29 @@ async function initStats() {
  * 加载风控状态
  */
 async function loadRiskStatus() {
+    // 先用本地缓存渲染卡片
+    const cached = readDashboardCache('risk_status');
+    if (cached && cached.success && cached.data) {
+        updateRiskCard(cached.data);
+        updateRiskModal(cached.data);
+    }
+
     try {
         const response = await fetch('/api/risk/status');
         const result = await response.json();
-        
+
         if (result.success && result.data) {
             const data = result.data;
-            
+
             // 更新首页卡片
             updateRiskCard(data);
-            
+
             // 更新模态窗口内容
             updateRiskModal(data);
-            
+
+            // 写入本地缓存
+            writeDashboardCache('risk_status', result);
+
             // 加载历史数据用于图表
             await loadRiskHistory();
         }
@@ -193,19 +224,29 @@ function renderRiskTrendChart(data) {
  * 加载市场温度
  */
 async function loadMarketTemperature() {
+    // 先用本地缓存渲染卡片
+    const cached = readDashboardCache('market_temperature');
+    if (cached && cached.success && cached.data) {
+        updateTemperatureCard(cached.data);
+        updateTemperatureModal(cached.data);
+    }
+
     try {
         const response = await fetch('/api/market-temperature/latest');
         const result = await response.json();
-        
+
         if (result.success && result.data) {
             const data = result.data;
-            
+
             // 更新首页卡片
             updateTemperatureCard(data);
-            
+
             // 更新模态窗口内容
             updateTemperatureModal(data);
-            
+
+            // 写入本地缓存
+            writeDashboardCache('market_temperature', result);
+
             // 加载历史数据用于图表
             await loadTemperatureHistory();
         }
