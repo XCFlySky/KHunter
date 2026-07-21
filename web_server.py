@@ -233,10 +233,19 @@ socketio = SocketIO(
     max_http_buffer_size=int(1e8)  # 100MB 缓冲区
 )
 
-# 静态资源/页面禁用缓存：手机/微信浏览器缓存激进，禁用后前端更新立即生效
+# Gzip压缩：服务器在海外，跨国带宽有限，压缩后HTML/JS/CSS/JSON传输量减少约70%
+from flask_compress import Compress
+Compress(app)
+
+# 静态资源缓存策略：
+# - /static/ 资源：模板中引用均带 ?v=版本号，部署更新后URL变化即自动失效，可安全长缓存1天
+#   （此前禁用缓存导致每次刷新71个静态文件全部回源验证，跨国网络下极慢）
+# - HTML页面：仍用 no-cache 保证每次校验最新（其中引用的静态资源版本号随之更新）
 @app.after_request
-def _disable_static_cache(response):
-    if request.path.startswith('/static/') or response.content_type.startswith('text/html'):
+def _static_cache_control(response):
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'public, max-age=86400'
+    elif response.content_type.startswith('text/html'):
         response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
 
