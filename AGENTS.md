@@ -16,6 +16,14 @@
 - 部署到服务器前必须先完成 GitHub 推送。
 - 本地仓库、GitHub、服务器三方代码必须保持同一版本。
 
+## 缓存架构（2026-07-21 新增）
+- `utils/redis_cache.py`：查询接口响应缓存层，Redis 优先，Redis 不可用时自动降级为进程内 TTL 缓存（30s 重连节流）。
+- 配置：`config/config.yaml` 的 `redis` 节（enabled/host/port/db/password/key_prefix），环境变量 `KHUNTER_REDIS_*` 可覆盖。
+- 键前缀 `khunter:api:`；`cached_api('key')` 装饰器接入，TTL 分级见 `web_server.py` 的 `_API_CACHE_TTLS`；响应头 `X-Cache: HIT/MISS` 可验证。
+- 主动失效 `invalidate_api_cache()`：数据更新完成、选股保存、温度重算、风控配置变更、排名生成/重算后调用。
+- 诊断接口：`GET /api/cache/status`。
+- 服务器 Redis：systemd `redis-server`，maxmemory 64mb + allkeys-lru；本地 Redis 跑在 WSL2（注意 WSL IP 变化需改 config.yaml 的 redis.host）。
+
 ## SSH 辅助
 - 服务器可用 paramiko 连接（密码见历史会话脚本 `%TEMP%\khunter_ssh.py`，若已清理需向用户索取）。
 - 服务器有 fail2ban，连接失败时隔几秒重试。
