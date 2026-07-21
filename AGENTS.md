@@ -10,11 +10,12 @@
 
 1. **先改本地项目** `F:\PythonProject\KHunter` 的代码；
 2. **提交并推送到 GitHub**（`git push fork dev/liuxincheng`）；
-3. **再部署到服务器**（从 GitHub 拉取或上传本地已提交版本）。
+3. **再部署到服务器**：在服务器 `/opt/khunter` 执行 `git pull --ff-only`（服务器仓库已跟踪 `fork/dev/liuxincheng`），然后 `systemctl restart khunter-web`。
 
 - ❌ 禁止直接在服务器上改代码（紧急热修除外，且修复后必须立即回同步：服务器 → 本地 → 推送 GitHub，保持三方一致）。
 - 部署到服务器前必须先完成 GitHub 推送。
 - 本地仓库、GitHub、服务器三方代码必须保持同一版本。
+- 服务器上 `data/`（运行时数据）与 `config/config.yaml`（含密钥）允许与仓库不一致，属正常，不要从这些文件反向覆盖仓库。
 
 ## 缓存架构（2026-07-21 新增）
 - `utils/redis_cache.py`：查询接口响应缓存层，Redis 优先，Redis 不可用时自动降级为进程内 TTL 缓存（30s 重连节流）。
