@@ -238,13 +238,13 @@ from flask_compress import Compress
 Compress(app)
 
 # 静态资源缓存策略：
-# - /static/ 资源：模板中引用均带 ?v=版本号，部署更新后URL变化即自动失效，可安全长缓存1天
-#   （此前禁用缓存导致每次刷新71个静态文件全部回源验证，跨国网络下极慢）
+# - /static/ 资源：缓存1小时。顶层引用带 ?v=版本号，但模块间 import 无版本号，
+#   缓存太久会导致部署后前端拿到旧JS；1小时兼顾 F5 性能与更新传播速度
 # - HTML页面：仍用 no-cache 保证每次校验最新（其中引用的静态资源版本号随之更新）
 @app.after_request
 def _static_cache_control(response):
     if request.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'public, max-age=86400'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
     elif response.content_type.startswith('text/html'):
         response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
@@ -5051,11 +5051,46 @@ def trend_signal_stocks():
 
     流程：选股记录 → tmId映射（本地缓存优先） → 批量快照 → 按Nick纪律规则打标
     打标为“基于趋势动物规则的分析判断”，接口字段为“接口直接返回的事实”
+
+    参数：
+        date: 选股日期（可选，默认最新选股日）
+        refresh: 默认为0——只返回本地已保存的快照（不调付费接口）；
+                 为1时才调用付费接口重新获取并覆盖保存（每个选股日期只保留最新一次）
     """
     try:
         date = request.args.get('date')
+        refresh = request.args.get('refresh', '0') == '1'
         fields_param = request.args.get('fields', '').strip()
         field_list = [f for f in fields_param.split(',') if f.strip()] if fields_param else TREND_DEFAULT_FIELDS
+
+        # 快照持久化表（避免重复进入页面重复付费）
+        db_manager.execute_with_retry("""
+            CREATE TABLE IF NOT EXISTS trend_signal_snapshot (
+                selection_date TEXT PRIMARY KEY,
+                payload TEXT,
+                created_at TEXT
+            )
+        """)
+
+        # 非刷新模式：只读本地已保存的快照
+        if not refresh:
+            target = date
+            if not target:
+                row = db_manager.query_one(
+                    "SELECT MAX(selection_date) AS d FROM stock_selection_record WHERE is_active = 1")
+                target = row['d'] if row else None
+            saved = db_manager.query_one(
+                "SELECT payload, created_at FROM trend_signal_snapshot WHERE selection_date = ?",
+                (target,)) if target else None
+            if saved:
+                data = json.loads(saved['payload'])
+                data['stored'] = True
+                data['stored_at'] = saved['created_at']
+                return jsonify({'success': True, 'data': data})
+            return jsonify({'success': True, 'data': {
+                'stocks': [], 'total': 0, 'stored': False,
+                'message': '该日期暂无已保存的趋势确认结果，点击「获取趋势确认」获取（付费）'
+            }})
 
         # 1. 取选股记录
         if date:
@@ -5159,15 +5194,31 @@ def trend_signal_stocks():
             est_snapshot = row_cost * (20 + min(n - 20, 80) * 0.8 + max(n - 100, 0) * 0.6)
         est_search = 0.01 * len(stocks)  # 上限估计（缓存命中后为0）
 
+        data = {
+            'stocks': result_stocks,
+            'total': len(result_stocks),
+            'tmid_resolved': len(tmid_map),
+            'estimated_cost': round(est_snapshot + est_search, 3),
+            'cost_note': f'快照约{est_snapshot:.3f}元({n}行×{row_cost:.3f}元/行,阶梯折扣) + tmId搜索≤{est_search:.2f}元(缓存命中后为0)，以实际账单为准',
+        }
+
+        # 保存快照：同一选股日期只保留最新一次，重进页面直接读取，避免重复付费
+        used_date = date
+        if not used_date and records:
+            used_date = records[0].get('selection_date')
+        if used_date:
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            db_manager.execute_with_retry(
+                "INSERT OR REPLACE INTO trend_signal_snapshot (selection_date, payload, created_at) VALUES (?, ?, ?)",
+                (used_date, json.dumps(data, ensure_ascii=False), now_str))
+            conn = db_manager.connect()
+            conn.commit()
+            data['stored'] = True
+            data['stored_at'] = now_str
+
         return jsonify({
             'success': True,
-            'data': {
-                'stocks': result_stocks,
-                'total': len(result_stocks),
-                'tmid_resolved': len(tmid_map),
-                'estimated_cost': round(est_snapshot + est_search, 3),
-                'cost_note': f'快照约{est_snapshot:.3f}元({n}行×{row_cost:.3f}元/行,阶梯折扣) + tmId搜索≤{est_search:.2f}元(缓存命中后为0)，以实际账单为准',
-            }
+            'data': data
         })
     except Exception as e:
         logger.error(f"信号股趋势确认失败: {e}")

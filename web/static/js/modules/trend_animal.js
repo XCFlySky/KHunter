@@ -33,7 +33,8 @@ export async function initTrendAnimal() {
         renderTrendAnimalLayout(container);
         loadTrendStatus();
         loadDailyReport(false);
-        loadSelectionDates();
+        // 先加载选股日期，再自动展示该日期已保存的趋势确认结果（不调付费接口）
+        loadSelectionDates().then(() => loadSignalStocks(false));
     } catch (e) {
         container.innerHTML = `<p class="text-danger">趋势动物配置检查失败: ${e.message}</p>`;
     }
@@ -159,7 +160,7 @@ function renderTrendAnimalLayout(container) {
             </div>
             <div class="card-body">
                 <div id="ta-cost-note" class="text-muted" style="font-size:12px;margin-bottom:8px;"></div>
-                <div id="ta-signal-table"><p class="text-muted">选择选股日期后点击「获取趋势确认」（付费字段快照，仅请求必要字段）</p></div>
+                <div id="ta-signal-table"><p class="text-muted">正在加载已保存的趋势确认结果...</p></div>
             </div>
         </div>
 
@@ -182,7 +183,8 @@ function renderTrendAnimalLayout(container) {
         </div>
     `;
 
-    document.getElementById('ta-load-signals').addEventListener('click', loadSignalStocks);
+    document.getElementById('ta-load-signals').addEventListener('click', () => loadSignalStocks(true));
+    document.getElementById('ta-date-select').addEventListener('change', () => loadSignalStocks(false));
     document.getElementById('ta-masked-key').textContent = document.getElementById('trend-animal-page').dataset.maskedKey || '';
     document.getElementById('ta-open-config').addEventListener('click', () => {
         const card = document.getElementById('ta-config-card');
@@ -389,22 +391,33 @@ async function loadSelectionDates() {
 }
 
 // ==================== 信号股趋势确认 ====================
-async function loadSignalStocks() {
+// refresh=false：只读服务器已保存的快照（免费）；refresh=true：调付费接口重新获取并覆盖保存
+async function loadSignalStocks(refresh = false) {
     const date = document.getElementById('ta-date-select').value;
     const table = document.getElementById('ta-signal-table');
     const costNote = document.getElementById('ta-cost-note');
-    table.innerHTML = '<p class="loading">正在获取趋势快照（tmId映射 + 批量快照）...</p>';
+    table.innerHTML = refresh
+        ? '<p class="loading">正在获取趋势快照（付费接口，tmId映射 + 批量快照）...</p>'
+        : '<p class="loading">正在加载已保存的趋势确认结果...</p>';
     costNote.textContent = '';
 
     try {
-        const resp = await fetch(`/api/trend/signal-stocks?date=${date || ''}`);
+        const resp = await fetch(`/api/trend/signal-stocks?date=${date || ''}${refresh ? '&refresh=1' : ''}`);
         const result = await resp.json();
         if (!result.success) {
             table.innerHTML = `<p class="text-danger">${result.message}</p>`;
             return;
         }
         const d = result.data;
-        costNote.textContent = d.cost_note ? `费用说明：${d.cost_note}` : '';
+        if (d.stored === false) {
+            table.innerHTML = `<p class="text-muted">${d.message || '该日期暂无已保存的趋势确认结果，点击「获取趋势确认」获取（付费）'}</p>`;
+            return;
+        }
+        const notes = [];
+        if (d.stored_at) notes.push(`上次获取：${d.stored_at}`);
+        if (refresh && d.cost_note) notes.push(`费用说明：${d.cost_note}`);
+        if (!refresh) notes.push('重新进入页面自动展示本结果，点击「获取趋势确认」将重新调用付费接口');
+        costNote.textContent = notes.join(' ｜ ');
         renderSignalTable(d.stocks, table);
     } catch (e) {
         table.innerHTML = `<p class="text-danger">请求失败: ${e.message}</p>`;
