@@ -34,3 +34,7 @@ reports/
 data/stock_selection.db
 data/stock_selection.db-shm
 data/stock_selection.db-wal
+# 模拟盘账户数据（运行时状态，本机/服务器各自独立）
+data/sim_account.db
+data/sim_account.db-shm
+data/sim_account.db-wal
