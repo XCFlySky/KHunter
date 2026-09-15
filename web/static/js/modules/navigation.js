@@ -49,6 +49,7 @@ export function switchPage(page) {
         'khunter': '狩猎场',
         'khunter-track': '狩猎跟踪',
         'strategy-runner': '策略执行器',
+        'sim-account': '模拟盘',
         'trend-animal': '趋势动物'
     };
     
@@ -128,6 +129,15 @@ export function switchPage(page) {
             });
         }).catch(err => {
             console.error('加载策略执行器模块失败:', err);
+        });
+    } else if (page === 'sim-account') {
+        // 模拟盘页面 - 初始化
+        import('./sim-account.js').then(module => {
+            module.initSimAccountPage().catch(err => {
+                console.error('初始化模拟盘页面失败:', err);
+            });
+        }).catch(err => {
+            console.error('加载模拟盘模块失败:', err);
         });
     }
 }

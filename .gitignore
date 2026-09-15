@@ -38,3 +38,5 @@ data/stock_selection.db-wal
 data/sim_account.db
 data/sim_account.db-shm
 data/sim_account.db-wal
+# 指数数据缓存（运行时任一机器自动重建）
+data/risk_cache/

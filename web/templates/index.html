@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>形态猎手-KHunter</title>
     <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
-    <link rel="stylesheet" href="/static/css/style.css?v=20260723">
-    <link rel="stylesheet" href="/static/css/khunter.css?v=20260723">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260915">
+    <link rel="stylesheet" href="/static/css/khunter.css?v=20260915">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         /* 响应式设计 */
@@ -253,6 +253,9 @@
                 </li>
                 <li class="nav-item" data-page="strategy-runner">
                     <span class="icon">🚀</span> 策略执行器
+                </li>
+                <li class="nav-item" data-page="sim-account">
+                    <span class="icon">💰</span> 模拟盘
                 </li>
                 <li class="nav-item" data-page="khunter">
                     <span class="icon">🎯</span> 狩猎场
@@ -1059,6 +1062,78 @@
                                         </table>
                                     </div>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 模拟盘页面 -->
+                <div id="sim-account-page" class="page">
+                    <!-- 空状态（未开始结算时显示） -->
+                    <div id="sim-empty-state" class="card" style="display:none;">
+                        <div class="card-body" style="text-align:center; padding:60px 20px; color:#6b7280;">
+                            <div style="font-size:48px; margin-bottom:16px;">💰</div>
+                            <h3 style="margin-bottom:8px; color:#374151;">模拟盘尚未开始</h3>
+                            <p style="font-size:13px; line-height:1.8;">每日调度器（daily_scheduler）在收盘选股后会自动进行模拟结算，<br>
+                            积累净值数据后这里将展示收益率曲线、回撤、胜率等指标。<br>
+                            也可在服务器手动执行 <code>python daily_scheduler.py --sim</code> 立即结算一次。</p>
+                        </div>
+                    </div>
+
+                    <!-- 收益指标卡 -->
+                    <div id="sim-metrics-cards" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:15px; margin-bottom:20px;"></div>
+
+                    <!-- 净值曲线 -->
+                    <div class="card" id="sim-nav-card" style="display:none; margin-bottom:20px;">
+                        <div class="card-body">
+                            <h3 style="font-size:15px; font-weight:600; color:#374151; margin-bottom:15px;">累计收益率走势</h3>
+                            <div style="height:360px; position:relative;">
+                                <canvas id="sim-nav-chart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 持仓 + 待执行订单 -->
+                    <div id="sim-position-section" style="display:none; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:20px;">
+                        <div class="card">
+                            <div class="card-body">
+                                <h3 style="font-size:15px; font-weight:600; color:#374151; margin-bottom:12px;">当前持仓 <span id="sim-cash-label" style="font-size:12px; color:#6b7280; font-weight:400;"></span></h3>
+                                <div class="table-container">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr><th>代码</th><th>名称</th><th>数量</th><th>买入价</th><th>现价</th><th>收益率</th><th>买入日期</th></tr>
+                                        </thead>
+                                        <tbody id="sim-positions-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                            <div class="card-body">
+                                <h3 style="font-size:15px; font-weight:600; color:#374151; margin-bottom:12px;">待执行订单 <span style="font-size:12px; color:#6b7280; font-weight:400;">（次交易日开盘价成交）</span></h3>
+                                <div class="table-container">
+                                    <table class="data-table">
+                                        <thead>
+                                            <tr><th>代码</th><th>名称</th><th>方向</th><th>原因</th><th>策略</th></tr>
+                                        </thead>
+                                        <tbody id="sim-pending-body"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 成交明细 -->
+                    <div class="card" id="sim-trades-card" style="display:none;">
+                        <div class="card-body">
+                            <h3 style="font-size:15px; font-weight:600; color:#374151; margin-bottom:12px;">成交明细</h3>
+                            <div class="table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr><th>日期</th><th>方向</th><th>代码</th><th>名称</th><th>价格</th><th>数量</th><th>金额</th><th>费用</th><th>单笔盈亏</th><th>原因</th></tr>
+                                    </thead>
+                                    <tbody id="sim-trades-body"></tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -1978,12 +2053,12 @@
         </div>
     </div>
 
-    <script src="/static/js/dashboard_stats.js?v=20260723"></script>
-    <script type="module" src="/static/js/app.js?v=20260723"></script>
-    <script src="/static/js/kline_chart.js?v=20260723"></script>
-    <script src="/static/js/init_simple.js?v=20260723"></script>
-    <script src="/static/js/trading.js?v=20260723"></script>
-    <script src="/static/js/data_update.js?v=20260723"></script>
+    <script src="/static/js/dashboard_stats.js?v=20260915"></script>
+    <script type="module" src="/static/js/app.js?v=20260915"></script>
+    <script src="/static/js/kline_chart.js?v=20260915"></script>
+    <script src="/static/js/init_simple.js?v=20260915"></script>
+    <script src="/static/js/trading.js?v=20260915"></script>
+    <script src="/static/js/data_update.js?v=20260915"></script>
     
     <!-- 回测结果模态框 -->
     <div id="backtest-result-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4);">

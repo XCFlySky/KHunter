@@ -65,6 +65,10 @@ _API_CACHE_TTLS = {
     'ranking_track': 600,
     # 交易日历（变化极少）
     'is_trading_day': 3600,
+    # 模拟盘
+    'sim_overview': 300,
+    'sim_nav': 600,
+    'sim_trades': 300,
 }
 _API_CACHE_TTL = 300  # 默认缓存有效期（秒）
 
@@ -5422,6 +5426,95 @@ def trend_daily_report():
     except Exception as e:
         logger.error(f"趋势日报构建失败: {e}")
         logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)})
+
+
+# ==================== 模拟盘 API ====================
+# 数据来自 trading/sim_account.py 的独立账户库 data/sim_account.db，
+# 由 daily_scheduler 每日选股后自动结算（信号当日生成、次交易日开盘价成交）
+
+def _get_sim_account():
+    from trading.sim_account import SimAccount
+    return SimAccount()
+
+
+@app.route('/api/sim/overview')
+@cached_api('sim_overview')
+def sim_overview():
+    """模拟盘总览：收益指标 + 当前持仓 + 待执行订单 + 现金"""
+    try:
+        sim = _get_sim_account()
+        metrics = sim.get_metrics()
+        positions = sim.get_positions()
+        with sim._connect() as conn:
+            cash = sim._get_cash_live(conn)
+            pending = [dict(r) for r in conn.execute(
+                "SELECT created_date, code, name, side, reason, strategy FROM sim_orders "
+                "WHERE status='pending' ORDER BY id").fetchall()]
+        return jsonify({'success': True, 'data': {
+            'metrics': metrics,
+            'positions': positions,
+            'pending_orders': pending,
+            'cash': round(cash, 2),
+        }})
+    except Exception as e:
+        logger.error(f"模拟盘总览获取失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/sim/nav')
+@cached_api('sim_nav')
+def sim_nav():
+    """模拟盘净值序列 + 基准指数（配置的风险基准指数，默认中证2000）累计收益对比"""
+    try:
+        sim = _get_sim_account()
+        navs = sim.get_nav_series(limit=500)
+
+        benchmark = None
+        if navs:
+            try:
+                from utils.index_data_fetcher import IndexDataFetcher
+                fetcher = IndexDataFetcher()
+                start = navs[0]['nav_date'].replace('-', '')
+                df = fetcher.fetch_index_data(start_date=start)
+                if df is not None and not df.empty:
+                    df['date_str'] = df['date'].dt.strftime('%Y-%m-%d')
+                    close_map = dict(zip(df['date_str'], df['close']))
+                    nav_dates = [n['nav_date'] for n in navs]
+                    base_price = None
+                    series = []
+                    for d in nav_dates:
+                        price = close_map.get(d)
+                        if price is None:
+                            series.append(None)
+                            continue
+                        if base_price is None:
+                            base_price = price
+                        series.append(round(price / base_price - 1, 6))
+                    benchmark = {'name': fetcher.index_name, 'series': series}
+            except Exception as be:
+                logger.warning(f"基准指数数据获取失败（不影响净值展示）: {be}")
+
+        return jsonify({'success': True, 'data': {
+            'nav': navs,
+            'benchmark': benchmark,
+        }})
+    except Exception as e:
+        logger.error(f"模拟盘净值获取失败: {e}")
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@app.route('/api/sim/trades')
+@cached_api('sim_trades')
+def sim_trades():
+    """模拟盘成交明细（默认最近100条）"""
+    try:
+        limit = request.args.get('limit', 100, type=int)
+        limit = max(1, min(limit, 500))
+        sim = _get_sim_account()
+        return jsonify({'success': True, 'data': sim.get_trades(limit=limit)})
+    except Exception as e:
+        logger.error(f"模拟盘成交明细获取失败: {e}")
         return jsonify({'success': False, 'message': str(e)})
 
 
