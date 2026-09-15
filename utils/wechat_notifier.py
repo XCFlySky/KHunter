@@ -144,3 +144,36 @@ def send_daily_notification(trade_date: str, signals: list, sim_summary: dict = 
     """构建并发送每日推送"""
     content = build_daily_message(trade_date, signals, sim_summary, web_url)
     return send_markdown(content)
+
+
+def build_sell_alert_message(trade_date: str, alerts: list) -> str:
+    """构建卖出信号即时提醒（止损/止盈/移动止损/持仓到期触发时单独推送）
+
+    Args:
+        trade_date: 触发日期
+        alerts: [{'code','name','reason','buy_price','current_price','return_rate','strategy'}]
+    """
+    lines = [f"## ⚠️ 模拟盘卖出信号 {trade_date}", ""]
+    for a in alerts:
+        reason = a.get('reason', '')
+        # 止损类红色警示，止盈类蓝色提示
+        color = 'warning' if ('止损' in reason or '到期' in reason) else 'info'
+        ret = a.get('return_rate', 0) * 100
+        lines.append(f"> **{a['code']} {a.get('name', '')}**　<font color=\"{color}\">{esc_text(reason)}</font>")
+        lines.append(f"> 收益率 {ret:+.2f}%　现价 {a.get('current_price', 0):.2f}"
+                     f"（买入价 {a.get('buy_price', 0):.2f}）")
+    lines.append("")
+    lines.append("以上持仓将于次交易日开盘价卖出")
+    return '\n'.join(lines)
+
+
+def esc_text(s) -> str:
+    """企微 markdown 内容中的基础转义（仅需防止换行破坏格式）"""
+    return str(s).replace('\n', ' ').replace('\r', ' ')
+
+
+def send_sell_alert(trade_date: str, alerts: list) -> bool:
+    """发送卖出信号即时提醒"""
+    if not alerts:
+        return False
+    return send_markdown(build_sell_alert_message(trade_date, alerts))

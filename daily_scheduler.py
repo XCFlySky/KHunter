@@ -20,6 +20,7 @@
   python daily_scheduler.py --test     # 仅测试选股流程（不更新数据、不保存结果）
   python daily_scheduler.py --sim      # 仅对最新交易日跑一次模拟盘结算（用当日已保存选股结果）
   python daily_scheduler.py --notify   # 仅发送一条企业微信测试消息（验证 webhook 配置）
+  python daily_scheduler.py --notify-alert  # 发送一条模拟的卖出信号提醒（虚构数据，验证提醒样式）
 """
 import sys
 import os
@@ -232,7 +233,12 @@ def run_daily_notify(end_date: str, signals: list, sim_summary: dict = None) -> 
     """
     logger.info('[5/5] 企业微信推送...')
     try:
-        from utils.wechat_notifier import send_daily_notification
+        from utils.wechat_notifier import send_daily_notification, send_sell_alert
+        # 卖出信号（止损/止盈等）时效性最强，单独即时推送一条
+        sell_alerts = (sim_summary or {}).get('sell_alerts') or []
+        if sell_alerts:
+            alert_ok = send_sell_alert(end_date, sell_alerts)
+            logger.info(f"[5/5] 卖出信号提醒（{len(sell_alerts)} 只）{'已推送' if alert_ok else '推送失败'}")
         ok = send_daily_notification(end_date, signals, sim_summary,
                                      web_url='http://47.254.123.6:5001')
         logger.info(f"[5/5] 企业微信推送{'成功' if ok else '未发送（未配置或失败）'}")
@@ -306,12 +312,32 @@ def test_notify():
     logger.info(f"测试消息发送{'成功' if ok else '失败'}")
 
 
+def test_notify_alert():
+    """卖出提醒测试模式：构造模拟止损/止盈信号，发送一条测试提醒"""
+    from utils.wechat_notifier import send_sell_alert, load_webhook
+    if not load_webhook():
+        logger.error("未找到 webhook 配置（config/notify.local.yaml 或环境变量 KHUNTER_WECHAT_WEBHOOK）")
+        return
+    today = datetime.now().strftime('%Y-%m-%d')
+    mock_alerts = [
+        {'code': '600519', 'name': '贵州茅台', 'reason': '止损 (收益率 -5.32%)',
+         'buy_price': 1478.00, 'current_price': 1399.37, 'return_rate': -0.0532,
+         'strategy': '金三角策略'},
+        {'code': '000858', 'name': '五粮液', 'reason': '止盈 (收益率 +15.41%)',
+         'buy_price': 128.50, 'current_price': 148.30, 'return_rate': 0.1541,
+         'strategy': '仙人指路策略'},
+    ]
+    ok = send_sell_alert(today, mock_alerts)
+    logger.info(f"模拟卖出提醒发送{'成功' if ok else '失败'}（内容为虚构测试数据）")
+
+
 def main():
     parser = argparse.ArgumentParser(description='KHunter 每日定时任务调度器')
     parser.add_argument('--now', action='store_true', help='立即执行一次每日任务')
     parser.add_argument('--test', action='store_true', help='仅测试选股流程（不更新不保存）')
     parser.add_argument('--sim', action='store_true', help='仅对最新交易日跑一次模拟盘结算')
     parser.add_argument('--notify', action='store_true', help='仅发送一条企业微信测试消息')
+    parser.add_argument('--notify-alert', action='store_true', help='发送一条模拟的卖出信号提醒（虚构数据）')
     args = parser.parse_args()
 
     if args.test:
@@ -322,6 +348,9 @@ def main():
         return
     if args.notify:
         test_notify()
+        return
+    if args.notify_alert:
+        test_notify_alert()
         return
     if args.now:
         daily_task()

@@ -244,7 +244,7 @@ class SimAccount:
                 return {'date': trade_date, 'skipped': True}
 
         summary = {'date': trade_date, 'skipped': False, 'filled_sells': 0, 'filled_buys': 0,
-                   'new_sell_orders': 0, 'new_buy_orders': 0}
+                   'new_sell_orders': 0, 'new_buy_orders': 0, 'sell_alerts': []}
 
         with self._connect() as conn:
             cash = self._get_cash_live(conn)
@@ -271,6 +271,17 @@ class SimAccount:
                     self._create_order(conn, trade_date, code, pos['name'], 'sell', 0,
                                        reason, pos.get('strategy', ''))
                     summary['new_sell_orders'] += 1
+                    # 记录卖出信号明细，供结算后即时推送提醒
+                    summary['sell_alerts'].append({
+                        'code': code,
+                        'name': pos['name'],
+                        'reason': reason,
+                        'buy_price': pos['buy_price'],
+                        'current_price': bar['close'],
+                        'return_rate': round(bar['close'] / pos['buy_price'] - 1, 4)
+                            if pos['buy_price'] > 0 else 0,
+                        'strategy': pos.get('strategy', ''),
+                    })
 
             # ---- 3. 从选股结果生成买单 ----
             cash = self._get_cash_live(conn)  # 重读实时现金（含当日成交变动）
