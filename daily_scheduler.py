@@ -19,6 +19,7 @@
   python daily_scheduler.py --now      # 立即执行一次（仍检查是否交易日）
   python daily_scheduler.py --test     # 仅测试选股流程（不更新数据、不保存结果）
   python daily_scheduler.py --sim      # 仅对最新交易日跑一次模拟盘结算（用当日已保存选股结果）
+  python daily_scheduler.py --notify   # 仅发送一条企业微信测试消息（验证 webhook 配置）
 """
 import sys
 import os
@@ -70,7 +71,7 @@ def run_data_update() -> bool:
     """
     from utils.data_collection_service import DataCollectionService
 
-    logger.info('[1/4] 开始数据增量更新...')
+    logger.info('[1/5] 开始数据增量更新...')
     try:
         service = DataCollectionService('data')
         task_id = f"SCHEDULED_UPDATE_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -79,13 +80,13 @@ def run_data_update() -> bool:
         status = service.update_status.get('status')
         if status == 'completed':
             stats = service.update_status.get('totalStats', {})
-            logger.info(f"[1/4] 数据更新完成: {stats}")
+            logger.info(f"[1/5] 数据更新完成: {stats}")
             return True
         else:
-            logger.warning(f"[1/4] 数据更新结束，状态: {status}，继续执行选股")
+            logger.warning(f"[1/5] 数据更新结束，状态: {status}，继续执行选股")
             return False
     except Exception as e:
-        logger.error(f"[1/4] 数据更新异常: {e}，继续执行选股", exc_info=True)
+        logger.error(f"[1/5] 数据更新异常: {e}，继续执行选股", exc_info=True)
         return False
 
 
@@ -101,7 +102,7 @@ def run_selection(end_date: str) -> list:
     from utils.global_db import get_global_db
     from strategy.strategy_registry import get_registry
 
-    logger.info('[2/4] 开始全策略选股...')
+    logger.info('[2/5] 开始全策略选股...')
     db = get_global_db()
     registry = get_registry("config/strategy_params.yaml")
     registry.auto_register_from_directory("strategy")  # 与 web_server 启动时一致，注册全部策略
@@ -131,7 +132,7 @@ def run_selection(end_date: str) -> list:
                 stock_data[code] = (stock_names.get(code, '未知'), df)
         except Exception:
             continue
-    logger.info(f"[2/4] 加载 {len(stock_data)} 只股票K线数据，截止 {end_date}")
+    logger.info(f"[2/5] 加载 {len(stock_data)} 只股票K线数据，截止 {end_date}")
 
     # 逐策略执行
     all_signals = []
@@ -155,7 +156,7 @@ def run_selection(end_date: str) -> list:
             except Exception:
                 continue
         if count > 0:
-            logger.info(f"[2/4]   {display_name}: 选中 {count} 只")
+            logger.info(f"[2/5]   {display_name}: 选中 {count} 只")
 
     # 合并同一股票被多个策略选中的情况（strategies 合并）
     merged = {}
@@ -171,7 +172,7 @@ def run_selection(end_date: str) -> list:
             existing['signals'].extend(sig['signals'])
 
     result = list(merged.values())
-    logger.info(f"[2/4] 选股完成: 共 {len(result)} 只股票（去重后）")
+    logger.info(f"[2/5] 选股完成: 共 {len(result)} 只股票（去重后）")
     return result
 
 
@@ -179,9 +180,9 @@ def save_results(signals: list, end_date: str):
     """保存选股结果到 stock_selection_record"""
     from utils.selection_record_manager import SelectionRecordManager
 
-    logger.info('[3/4] 保存选股结果...')
+    logger.info('[3/5] 保存选股结果...')
     if not signals:
-        logger.info('[3/4] 无选股结果，跳过保存')
+        logger.info('[3/5] 无选股结果，跳过保存')
         return
 
     manager = SelectionRecordManager()
@@ -197,10 +198,10 @@ def save_results(signals: list, end_date: str):
         selection_time=datetime.now(),
         end_date=end_date
     )
-    logger.info(f"[3/4] 保存完成: {result}")
+    logger.info(f"[3/5] 保存完成: {result}")
 
 
-def run_sim_account(end_date: str, signals: list) -> bool:
+def run_sim_account(end_date: str, signals: list) -> dict:
     """模拟盘每日结算（成交昨日订单 → 卖出检查 → 生成买单 → 记录净值）
 
     失败不影响主流程，仅记录日志。
@@ -208,21 +209,41 @@ def run_sim_account(end_date: str, signals: list) -> bool:
     Args:
         end_date: 交易日（YYYY-MM-DD）
         signals: 当日选股结果（run_selection 的返回）
+
+    Returns:
+        dict: 结算摘要；失败返回 None
     """
-    logger.info('[4/4] 模拟盘每日结算...')
+    logger.info('[4/5] 模拟盘每日结算...')
     try:
         from trading.sim_account import SimAccount
         sim = SimAccount()
         result = sim.run_daily(end_date, signals)
-        logger.info(f"[4/4] 模拟盘结算完成: {result}")
-        return True
+        logger.info(f"[4/5] 模拟盘结算完成: {result}")
+        return result
     except Exception as e:
-        logger.error(f"[4/4] 模拟盘结算异常: {e}", exc_info=True)
+        logger.error(f"[4/5] 模拟盘结算异常: {e}", exc_info=True)
+        return None
+
+
+def run_daily_notify(end_date: str, signals: list, sim_summary: dict = None) -> bool:
+    """企业微信群推送每日选股结果与模拟盘结算摘要
+
+    失败不影响主流程，仅记录日志。
+    """
+    logger.info('[5/5] 企业微信推送...')
+    try:
+        from utils.wechat_notifier import send_daily_notification
+        ok = send_daily_notification(end_date, signals, sim_summary,
+                                     web_url='http://47.254.123.6:5001')
+        logger.info(f"[5/5] 企业微信推送{'成功' if ok else '未发送（未配置或失败）'}")
+        return ok
+    except Exception as e:
+        logger.error(f"[5/5] 企业微信推送异常: {e}", exc_info=True)
         return False
 
 
 def daily_task():
-    """每日任务主流程：交易日检查 → 更新 → 选股 → 保存"""
+    """每日任务主流程：交易日检查 → 更新 → 选股 → 保存 → 模拟盘结算 → 企业微信推送"""
     today = datetime.now().strftime('%Y-%m-%d')
     logger.info("=" * 60)
     logger.info(f"每日任务触发: {today}")
@@ -240,7 +261,8 @@ def daily_task():
     run_data_update()
     signals = run_selection(today)
     save_results(signals, today)
-    run_sim_account(today, signals)
+    sim_summary = run_sim_account(today, signals)
+    run_daily_notify(today, signals, sim_summary)
     elapsed = (datetime.now() - start).total_seconds()
     logger.info(f"每日任务完成，总耗时 {elapsed/60:.1f} 分钟")
     logger.info("=" * 60)
@@ -268,11 +290,28 @@ def test_sim():
     run_sim_account(latest, signals)
 
 
+def test_notify():
+    """通知测试模式：发送一条企业微信测试消息（验证 webhook 配置）"""
+    from utils.wechat_notifier import send_markdown, load_webhook
+    webhook = load_webhook()
+    if not webhook:
+        logger.error("未找到 webhook 配置（config/notify.local.yaml 或环境变量 KHUNTER_WECHAT_WEBHOOK）")
+        return
+    today = datetime.now().strftime('%Y-%m-%d')
+    ok = send_markdown(
+        f"## ✅ KHunter 推送测试\n"
+        f"> 每日选股推送通道已打通（{today}）\n"
+        f"> 每个交易日收盘后将自动推送选股结果与模拟盘结算摘要"
+    )
+    logger.info(f"测试消息发送{'成功' if ok else '失败'}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='KHunter 每日定时任务调度器')
     parser.add_argument('--now', action='store_true', help='立即执行一次每日任务')
     parser.add_argument('--test', action='store_true', help='仅测试选股流程（不更新不保存）')
     parser.add_argument('--sim', action='store_true', help='仅对最新交易日跑一次模拟盘结算')
+    parser.add_argument('--notify', action='store_true', help='仅发送一条企业微信测试消息')
     args = parser.parse_args()
 
     if args.test:
@@ -280,6 +319,9 @@ def main():
         return
     if args.sim:
         test_sim()
+        return
+    if args.notify:
+        test_notify()
         return
     if args.now:
         daily_task()

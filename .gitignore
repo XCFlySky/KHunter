@@ -40,3 +40,5 @@ data/sim_account.db-shm
 data/sim_account.db-wal
 # 指数数据缓存（运行时任一机器自动重建）
 data/risk_cache/
+# 通知密钥（webhook 等，本机/服务器各自维护，绝不入库）
+config/notify.local.yaml
